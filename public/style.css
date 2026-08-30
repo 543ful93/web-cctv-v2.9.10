@@ -1,0 +1,525 @@
+/* Web-CCTV Custom Stylesheet */
+
+/* Running Ticker/Marquee Animation */
+@keyframes marquee {
+  0% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+.animate-marquee {
+  display: inline-block;
+  padding-left: 100%;
+  animation: marquee 30s linear infinite;
+}
+
+/* Pause marquee on hover */
+#ticker-bar:hover .animate-marquee {
+  animation-play-state: paused;
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Hide scrollbar for IE, Edge and Firefox */
+.scrollbar-none {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+/* Map adjustment */
+#map {
+  width: 100%;
+  height: 100%;
+  background: #0b1329;
+}
+
+/* Custom transitions and styling overrides */
+.nav-item.active {
+  background-color: #1e3a8a !important; /* bg-blue-900 */
+  color: #ffffff !important;
+  border-left: 4px solid #3b82f6; /* border-blue-500 */
+}
+
+/* CCTV grid video styling */
+.cctv-card-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background-color: #000;
+}
+
+/* Leaflet Popup Override dark theme */
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: #0f172a !important; /* bg-slate-900 */
+  color: #f1f5f9 !important;      /* text-slate-100 */
+  border: 1px solid #1e293b;     /* border-slate-800 */
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.5);
+  border-radius: 0.75rem !important;
+}
+
+.leaflet-popup-content {
+  margin: 12px 16px !important;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+}
+
+.leaflet-container a.leaflet-popup-close-button {
+  color: #94a3b8 !important; /* text-slate-400 */
+  padding: 6px !important;
+}
+
+.leaflet-container a.leaflet-popup-close-button:hover {
+  color: #f1f5f9 !important;
+}
+
+/* Touch friendly button adjustments for mobile */
+@media (max-width: 768px) {
+  /* Prevent zoom on inputs on iOS */
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Fail-safe overlay blocking prevention */
+#global-loader.opacity-0,
+.opacity-0 {
+  pointer-events: none !important;
+}
+
+/* ================= THEME: LIGHT MODE OVERRIDES ================= */
+body.light-mode {
+  background-color: #f8fafc !important; /* bg-slate-50 */
+  color: #0f172a !important;            /* text-slate-900 */
+}
+
+body.light-mode #sidebar,
+body.light-mode #ticker-bar,
+body.light-mode .bg-slate-900,
+body.light-mode .bg-slate-950 {
+  background-color: #ffffff !important; /* bg-white cards & sidebar */
+  border-color: #e2e8f0 !important;     /* border-slate-200 */
+  color: #1e293b !important;
+}
+
+body.light-mode #ticker-bar {
+  background-color: #2563eb !important; /* Keep blue for ticker but clean text */
+  color: #ffffff !important;
+}
+
+body.light-mode .text-slate-100,
+body.light-mode .text-slate-200,
+body.light-mode .text-white {
+  color: #0f172a !important;
+}
+
+body.light-mode .text-slate-300,
+body.light-mode .text-slate-400 {
+  color: #475569 !important;            /* text-slate-600 */
+}
+
+body.light-mode .border-slate-800,
+body.light-mode .border-slate-850 {
+  border-color: #e2e8f0 !important;     /* border-slate-200 */
+}
+
+body.light-mode input,
+body.light-mode select,
+body.light-mode textarea {
+  background-color: #f1f5f9 !important; /* bg-slate-100 inputs */
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+body.light-mode .nav-item {
+  color: #334155 !important;
+}
+
+body.light-mode .nav-item:hover {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+body.light-mode .nav-item.active {
+  background-color: #2563eb !important; /* active blue brand */
+  color: #ffffff !important;
+  border-left-color: #3b82f6 !important;
+}
+
+body.light-mode #app-footer-text,
+body.light-mode .text-slate-500 {
+  color: #64748b !important;
+}
+
+body.light-mode .bg-slate-950\/40 {
+  background-color: #f1f5f9 !important;
+}
+
+/* Sidebar Hide/Show transitions */
+#sidebar {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Collapsible Sidebar Layout Override */
+#app-container.sidebar-collapsed #sidebar {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  transform: translateX(-100%) !important;
+  border-right-width: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Berikan ruang atas ekstra agar tombol hamburger melayang tidak menimpa judul halaman */
+#view-container {
+  padding-top: 3rem !important;
+}
+
+@media (max-width: 768px) {
+  #view-container {
+    padding-top: 1rem !important; /* Mobile top bar is already present, so no extra padding needed on mobile! */
+  }
+}
+
+/* ================= FULLSCREEN LIVE PLAYER ================= */
+/* Fallback CSS fullscreen (bila Fullscreen API tidak tersedia di WebView lama) */
+#player-video-stage.cctv-pseudo-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  z-index: 9999 !important;
+  background: #000 !important;
+  border-radius: 0 !important;
+  grid-column: 1 / -1 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+#player-video-stage.cctv-pseudo-fullscreen video,
+#player-video-stage.cctv-pseudo-fullscreen iframe {
+  object-fit: contain !important;
+}
+
+/* Saat fullscreen penuh, video harus menutupi seluruh area */
+#player-video-stage:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
+#player-video-stage:fullscreen video,
+#player-video-stage:fullscreen iframe {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+
+#player-video-stage:fullscreen #player-splash {
+  position: absolute !important;
+  inset: 0 !important;
+}
+
+/* ================= ANDROID-STYLE MOBILE BOTTOM NAV =================
+   Navigasi utama dibuat seperti aplikasi Android: fixed di bawah, mudah
+   disentuh, aman dari gesture bar, dan tidak menutupi isi halaman. */
+.mobile-bottom-nav {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  #mobile-bottom-nav {
+    display: flex !important;
+    position: fixed;
+    z-index: 80;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    min-height: 64px;
+    padding: 7px 8px calc(7px + env(safe-area-inset-bottom, 0px));
+    align-items: stretch;
+    justify-content: space-around;
+    gap: 3px;
+    background: rgba(15, 23, 42, 0.96);
+    border-top: 1px solid rgba(71, 85, 105, 0.42);
+    box-shadow: 0 -10px 28px rgba(2, 6, 23, 0.5);
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+  }
+
+  /* Tailwind .hidden tetap harus menang untuk menu admin/privat */
+  #mobile-bottom-nav .mobile-bottom-item.hidden {
+    display: none !important;
+  }
+
+  #mobile-bottom-nav .mobile-bottom-item {
+    display: flex;
+    flex: 1 1 0%;
+    min-width: 0;
+    min-height: 50px;
+    padding: 2px 3px 1px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    color: #94a3b8;
+    background: transparent;
+    border: 0;
+    border-radius: 14px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
+  }
+
+  #mobile-bottom-nav .mobile-bottom-item:active {
+    transform: scale(0.94);
+    background: rgba(30, 41, 59, 0.82);
+  }
+
+  #mobile-bottom-nav .mobile-bottom-icon {
+    display: flex;
+    width: 34px;
+    height: 25px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    font-size: 17px;
+    line-height: 1;
+    transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+  }
+
+  #mobile-bottom-nav .mobile-bottom-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    line-height: 14px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  #mobile-bottom-nav .mobile-bottom-item.active {
+    color: #60a5fa;
+  }
+
+  #mobile-bottom-nav .mobile-bottom-item.active .mobile-bottom-icon {
+    color: #ffffff;
+    background: #2563eb;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.38);
+    transform: translateY(-1px);
+  }
+
+  #mobile-bottom-nav .mobile-bottom-item.active .mobile-bottom-label {
+    color: #93c5fd;
+  }
+
+  /* Halaman admin/settings dianggap berada di dalam menu Lainnya. */
+  #mobile-bottom-nav #mobile-bottom-more.active .mobile-bottom-icon {
+    color: #ffffff;
+    background: #334155;
+    box-shadow: 0 4px 12px rgba(51, 65, 85, 0.4);
+  }
+
+  /* Beri ruang aman agar kartu/tabel terakhir tidak tertutup bottom nav. */
+  #view-container {
+    padding-bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px)) !important;
+    scroll-padding-bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Footer desktop digantikan oleh bottom navigation pada layar kecil. */
+  #app-container > main > footer {
+    display: none !important;
+  }
+
+  /* Drawer harus berada di atas bottom navigation ketika Menu dibuka. */
+  #sidebar {
+    z-index: 100 !important;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  #sidebar-backdrop {
+    z-index: 90 !important;
+  }
+
+  /* Toast tidak boleh tertutup oleh navigasi bawah. */
+  #toast {
+    bottom: calc(4.8rem + env(safe-area-inset-bottom, 0px)) !important;
+    left: 0.75rem;
+    right: 0.75rem;
+    max-width: none;
+  }
+
+  /* Area header lebih ringkas dan terasa seperti app bar Android. */
+  #app-container > header {
+    min-height: 56px;
+    height: 56px;
+  }
+}
+
+@media (max-width: 380px) {
+  #mobile-bottom-nav {
+    padding-left: 4px;
+    padding-right: 4px;
+    gap: 1px;
+  }
+
+  #mobile-bottom-nav .mobile-bottom-label {
+    font-size: 9px;
+  }
+}
+
+/* Bottom navigation pada tema terang */
+body.light-mode #mobile-bottom-nav {
+  background: rgba(255, 255, 255, 0.96);
+  border-top-color: rgba(203, 213, 225, 0.9);
+  box-shadow: 0 -10px 28px rgba(15, 23, 42, 0.12);
+}
+
+body.light-mode #mobile-bottom-nav .mobile-bottom-item {
+  color: #64748b;
+}
+
+body.light-mode #mobile-bottom-nav .mobile-bottom-item:active {
+  background: #f1f5f9;
+}
+
+body.light-mode #mobile-bottom-nav .mobile-bottom-item.active {
+  color: #2563eb;
+}
+
+body.light-mode #mobile-bottom-nav .mobile-bottom-item.active .mobile-bottom-label {
+  color: #2563eb;
+}
+
+body.light-mode #mobile-bottom-nav #mobile-bottom-more.active .mobile-bottom-icon {
+  color: #ffffff;
+  background: #475569;
+}
+
+/* ==========================================================================
+   v2.9: TEMA — WARNA AKSEN YANG BISA DIPILIH
+   --------------------------------------------------------------------------
+   Seluruh kelas biru Tailwind yang dipakai aplikasi dialihkan ke variabel CSS,
+   jadi mengganti satu atribut data-accent pada <body> langsung mengubah warna
+   merek di seluruh dashboard tanpa menyentuh HTML/JS.
+   ========================================================================== */
+:root,
+body[data-accent="blue"] {
+  --accent-300: #93c5fd;
+  --accent-400: #60a5fa;
+  --accent-500: #3b82f6;
+  --accent-600: #2563eb;
+  --accent-700: #1d4ed8;
+  --accent-900: #1e3a8a;
+}
+body[data-accent="emerald"] {
+  --accent-300: #6ee7b7; --accent-400: #34d399; --accent-500: #10b981;
+  --accent-600: #059669; --accent-700: #047857; --accent-900: #064e3b;
+}
+body[data-accent="violet"] {
+  --accent-300: #c4b5fd; --accent-400: #a78bfa; --accent-500: #8b5cf6;
+  --accent-600: #7c3aed; --accent-700: #6d28d9; --accent-900: #4c1d95;
+}
+body[data-accent="rose"] {
+  --accent-300: #fda4af; --accent-400: #fb7185; --accent-500: #f43f5e;
+  --accent-600: #e11d48; --accent-700: #be123c; --accent-900: #881337;
+}
+body[data-accent="amber"] {
+  --accent-300: #fcd34d; --accent-400: #fbbf24; --accent-500: #f59e0b;
+  --accent-600: #d97706; --accent-700: #b45309; --accent-900: #78350f;
+}
+body[data-accent="cyan"] {
+  --accent-300: #67e8f9; --accent-400: #22d3ee; --accent-500: #06b6d4;
+  --accent-600: #0891b2; --accent-700: #0e7490; --accent-900: #164e63;
+}
+
+/* Pengalihan kelas utilitas biru -> variabel aksen */
+.bg-blue-300   { background-color: var(--accent-300) !important; }
+.bg-blue-400   { background-color: var(--accent-400) !important; }
+.bg-blue-500   { background-color: var(--accent-500) !important; }
+.bg-blue-600   { background-color: var(--accent-600) !important; }
+.bg-blue-700   { background-color: var(--accent-700) !important; }
+.text-blue-300 { color: var(--accent-300) !important; }
+.text-blue-400 { color: var(--accent-400) !important; }
+.text-blue-500 { color: var(--accent-500) !important; }
+.text-blue-600 { color: var(--accent-600) !important; }
+.border-blue-500 { border-color: var(--accent-500) !important; }
+.border-blue-700 { border-color: var(--accent-700) !important; }
+.border-blue-900 { border-color: var(--accent-900) !important; }
+.from-blue-700 { --tw-gradient-from: var(--accent-700) !important; }
+.to-blue-500   { --tw-gradient-to: var(--accent-500) !important; }
+/* focus:ring-blue-500 menyetel --tw-ring-color lewat kelas ring-* */
+.ring-blue-500 { --tw-ring-color: var(--accent-500) !important; }
+
+/* Elemen yang warnanya di-hardcode di aturan light-mode ikut memakai aksen */
+body.light-mode #ticker-bar,
+body.light-mode .nav-item.active {
+  background-color: var(--accent-600) !important;
+}
+body.light-mode .nav-item.active {
+  border-left-color: var(--accent-500) !important;
+}
+
+/* ==========================================================================
+   v2.9: PERBAIKAN TEMA TERANG
+   Versi lama hanya menimpa sebagian kelas, sehingga modal, tabel, badge, dan
+   tombol masih gelap di mode terang. Bagian di bawah melengkapinya.
+   ========================================================================== */
+body.light-mode .bg-slate-800,
+body.light-mode .bg-slate-800\/40,
+body.light-mode .bg-slate-800\/60 {
+  background-color: #f1f5f9 !important;
+}
+body.light-mode .bg-slate-900\/80,
+body.light-mode .bg-slate-950\/90,
+body.light-mode .bg-slate-950\/80 {
+  background-color: rgba(248, 250, 252, 0.92) !important;
+}
+body.light-mode .divide-slate-800\/60 > * + *,
+body.light-mode .divide-slate-800 > * + * {
+  border-color: #e2e8f0 !important;
+}
+body.light-mode .text-slate-600,
+body.light-mode .text-slate-700 {
+  color: #334155 !important;
+}
+/* Badge & chip berwarna tetap terbaca di atas latar terang */
+body.light-mode .bg-emerald-500\/10 { background-color: rgba(16, 185, 129, 0.14) !important; }
+body.light-mode .bg-rose-500\/10    { background-color: rgba(244, 63, 94, 0.14) !important; }
+body.light-mode .bg-red-500\/10     { background-color: rgba(239, 68, 68, 0.14) !important; }
+body.light-mode .bg-amber-500\/10   { background-color: rgba(245, 158, 11, 0.16) !important; }
+body.light-mode .bg-fuchsia-500\/15 { background-color: rgba(217, 70, 239, 0.14) !important; }
+body.light-mode .bg-violet-500\/10  { background-color: rgba(139, 92, 246, 0.14) !important; }
+body.light-mode .bg-sky-500\/10     { background-color: rgba(14, 165, 233, 0.14) !important; }
+body.light-mode .bg-cyan-500\/10    { background-color: rgba(6, 182, 212, 0.14) !important; }
+/* Tombol tetap kontras */
+body.light-mode button.bg-slate-700,
+body.light-mode button.bg-slate-800 {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+body.light-mode button.bg-slate-700:hover,
+body.light-mode button.bg-slate-800:hover {
+  background-color: #cbd5e1 !important;
+}
+/* Kotak kode / monospace */
+body.light-mode code,
+body.light-mode .font-mono {
+  color: #1e293b;
+}
+body.light-mode code {
+  background-color: #e2e8f0 !important;
+}
+/* Scrollbar agar serasi */
+body.light-mode ::-webkit-scrollbar-thumb { background-color: #cbd5e1; }
+body.light-mode ::-webkit-scrollbar-track { background-color: #f1f5f9; }

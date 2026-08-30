@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#090d16">
+
+    <!-- ===== Aplikasi Web-CCTV (WebView) ===== -->
+    <WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <!-- Tombol kecil untuk membuka ulang pengaturan alamat.
+         Sengaja dibuat kecil & transparan di pojok agar tidak mengganggu,
+         tetapi selalu ada — sebelumnya tidak ada jalan kembali ke form. -->
+    <Button
+        android:id="@+id/btnReconfigure"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentEnd="true"
+        android:layout_margin="8dp"
+        android:background="@android:color/transparent"
+        android:text="⚙"
+        android:textColor="#8899aa"
+        android:textSize="20sp"
+        android:visibility="gone"
+        android:contentDescription="Ubah alamat server" />
+
+    <!-- ===== Form Pengaturan Alamat ===== -->
+    <ScrollView
+        android:id="@+id/setupLayout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true"
+        android:visibility="visible">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:paddingTop="32dp"
+            android:paddingBottom="32dp">
+
+            <ImageView
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:src="@android:drawable/ic_menu_camera"
+                android:contentDescription="Logo" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="Web-CCTV"
+                android:textColor="#ffffff"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="24dp"
+                android:gravity="center"
+                android:text="Hubungkan ke server CCTV Anda"
+                android:textColor="#94a3b8"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/bg_card"
+                android:padding="18dp">
+
+                <!-- == Alamat lokal == -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ALAMAT SERVER LOKAL"
+                    android:textColor="#e2e8f0"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:layout_marginBottom="8dp"
+                    android:text="IP STB / komputer tempat Web-CCTV berjalan. Wajib diisi."
+                    android:textColor="#64748b"
+                    android:textSize="11sp" />
+
+                <EditText
+                    android:id="@+id/inputLocalIp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_input"
+                    android:hint="192.168.1.18:3000"
+                    android:inputType="textUri"
+                    android:imeOptions="actionNext"
+                    android:maxLines="1"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:paddingTop="13dp"
+                    android:paddingBottom="13dp"
+                    android:textColor="#ffffff"
+                    android:textColorHint="#475569"
+                    android:textSize="15sp"
+                    android:fontFamily="monospace"
+                    android:autofillHints="" />
+
+                <TextView
+                    android:id="@+id/hintLocal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Cukup tempel IP atau IP:port — awalan http:// ditambah otomatis."
+                    android:textColor="#64748b"
+                    android:textSize="11sp" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="18dp"
+                    android:layout_marginBottom="18dp"
+                    android:background="#1e293b" />
+
+                <!-- == Alamat cloud (OPSIONAL) == -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ALAMAT CLOUD / DOMAIN  (OPSIONAL)"
+                    android:textColor="#e2e8f0"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:layout_marginBottom="8dp"
+                    android:text="Dipakai otomatis saat HP berada di luar jaringan rumah. Kosongkan bila tidak memakai Cloudflare Tunnel."
+                    android:textColor="#64748b"
+                    android:textSize="11sp" />
+
+                <EditText
+                    android:id="@+id/inputCloudDomain"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_input"
+                    android:hint="cctv.domainanda.com"
+                    android:inputType="textUri"
+                    android:imeOptions="actionDone"
+                    android:maxLines="1"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:paddingTop="13dp"
+                    android:paddingBottom="13dp"
+                    android:textColor="#ffffff"
+                    android:textColorHint="#475569"
+                    android:textSize="15sp"
+                    android:fontFamily="monospace"
+                    android:autofillHints="" />
+
+                <TextView
+                    android:id="@+id/hintCloud"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Boleh dikosongkan."
+                    android:textColor="#64748b"
+                    android:textSize="11sp" />
+
+            </LinearLayout>
+
+            <!-- == Status pengujian == -->
+            <TextView
+                android:id="@+id/txtStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:gravity="center"
+                android:textColor="#94a3b8"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <ProgressBar
+                android:id="@+id/progressBar"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_marginTop="14dp"
+                android:visibility="gone" />
+
+            <!-- == Tombol == -->
+            <Button
+                android:id="@+id/btnSave"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:background="@drawable/bg_button"
+                android:paddingTop="14dp"
+                android:paddingBottom="14dp"
+                android:text="SIMPAN &amp; HUBUNGKAN"
+                android:textColor="#ffffff"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnTest"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@android:color/transparent"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:text="Uji Koneksi Saja"
+                android:textColor="#60a5fa"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:gravity="center"
+                android:text="Cari IP STB dengan menjalankan  hostname -I  di terminal STB."
+                android:textColor="#475569"
+                android:textSize="11sp" />
+
+        </LinearLayout>
+    </ScrollView>
+</RelativeLayout>

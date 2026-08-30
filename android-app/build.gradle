@@ -1,0 +1,21 @@
+// Berkas build tingkat atas.
+//
+// PENTING: repositories TIDAK boleh dideklarasikan di sini lewat `allprojects`.
+// settings.gradle sudah menetapkan `RepositoriesMode.FAIL_ON_PROJECT_REPOS`, yang
+// membuat Gradle MENOLAK build bila ada repository dideklarasikan di berkas build
+// proyek. Kombinasi itu menghasilkan galat:
+//   "Build was configured to prefer settings repositories over project repositories
+//    but repository 'Google' was added by build file 'build.gradle'"
+// dan inilah yang membuat build APK gagal di GitHub Actions.
+//
+// Semua repository sudah dideklarasikan di settings.gradle (pluginManagement dan
+// dependencyResolutionManagement), jadi di sini cukup mendeklarasikan versi plugin.
+
+plugins {
+    id 'com.android.application' version '8.0.2' apply false
+    id 'org.jetbrains.kotlin.android' version '1.8.20' apply false
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}

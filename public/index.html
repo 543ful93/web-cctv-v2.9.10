@@ -1,0 +1,2302 @@
+<!DOCTYPE html>
+<html lang="id" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <!-- Anti-cache agar update tampilan (termasuk menu bawah ala Android) selalu muncul -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Web-CCTV</title>
+  
+  <!-- v2.9: terapkan tema SEBELUM render agar tidak ada kedipan warna salah -->
+  <script>
+    (function () {
+      try {
+        var mode = localStorage.getItem("theme_mode") || "dark";
+        var accent = localStorage.getItem("theme_accent") || "blue";
+        var dark = mode === "dark" ||
+          (mode === "auto" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (!dark) document.body && document.body.classList.add("light-mode");
+        // <body> belum ada saat <head> diparse; simpan dulu, diterapkan lagi di app.js
+        document.documentElement.setAttribute("data-theme-pending", dark ? "dark" : "light");
+        document.documentElement.setAttribute("data-accent-pending", accent);
+      } catch (e) {}
+    })();
+  </script>
+  <!-- Browser Favicon Configuration (Custom PNG + Inline SVG Fallback) -->
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📹</text></svg>">
+  
+  <!-- CDNs for styling, icons, mapping, and HLS streaming -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0f7ff',
+              100: '#e0effe',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              900: '#1e3a8a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/style.css?v=2.8.0">
+</head>
+<body class="flex flex-col h-full overflow-hidden font-sans select-none antialiased">
+
+  <!-- Running Ticker at the top -->
+  <div id="ticker-bar" class="bg-blue-600 text-white text-xs py-1 px-4 overflow-hidden relative whitespace-nowrap z-50 h-6 flex items-center">
+    <div id="ticker-text" class="inline-block animate-marquee"></div>
+  </div>
+
+  <!-- App Wrapper (Hidden when loading / logged out) -->
+  <div id="app-container" class="hidden flex flex-col md:flex-row flex-1 overflow-hidden relative">
+    
+    <!-- Mobile Top Bar (Only visible on mobile screens) -->
+    <header class="md:hidden flex items-center justify-between h-14 bg-slate-900 border-b border-slate-800 px-4 flex-shrink-0 z-30 w-full">
+      <div class="flex items-center space-x-3">
+        <button onclick="toggleMobileSidebar()" class="text-slate-300 hover:text-white focus:outline-none p-1.5 rounded-lg active:bg-slate-800 transition">
+          <i class="fa-solid fa-bars text-lg"></i>
+        </button>
+        <div class="flex items-center space-x-2.5">
+          <!-- Customizable Mobile Logo with default icon fallback -->
+          <div class="relative flex items-center justify-center">
+            <img id="mobile-app-logo-img" src="/logo.png" class="w-7 h-7 rounded-md object-contain" onerror="this.style.display='none'; document.getElementById('mobile-app-logo-fallback').classList.remove('hidden')">
+            <div id="mobile-app-logo-fallback" class="hidden bg-blue-600 text-white p-1.5 rounded-md flex items-center justify-center">
+              <i class="fa-solid fa-video text-xs"></i>
+            </div>
+          </div>
+          <div>
+            <span id="mobile-app-title" class="font-bold text-base leading-tight">Web-CCTV</span>
+            <span id="mobile-app-sub" class="text-[10px] text-slate-400 block -mt-0.5">HG680P</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Language Switcher in Mobile Top Bar -->
+      <div class="flex items-center space-x-1 bg-slate-950 p-1 rounded-md text-[10px] border border-slate-800">
+        <button id="mobile-lang-id-btn" class="px-2 py-0.5 rounded transition font-medium text-blue-400 bg-slate-800" onclick="setLanguage('id')">ID</button>
+        <button id="mobile-lang-en-btn" class="px-2 py-0.5 rounded transition font-medium text-slate-400 hover:text-slate-200" onclick="setLanguage('en')">EN</button>
+      </div>
+    </header>
+
+    <!-- Sidebar Backdrop overlay for Mobile -->
+    <div id="sidebar-backdrop" onclick="toggleMobileSidebar()" class="fixed inset-0 bg-black/70 z-40 hidden transition-opacity duration-300 opacity-0 md:hidden pointer-events-none"></div>
+    
+    <!-- Sidebar Navigation Drawer (Sliding on mobile, static on desktop) -->
+    <aside id="sidebar" class="fixed inset-y-0 left-0 w-64 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 z-50 transform -translate-x-full md:translate-x-0 md:static transition-transform duration-300 ease-in-out h-full">
+      <!-- Sidebar Header -->
+      <div class="p-4 flex items-center justify-between border-b border-slate-800">
+        <div class="flex items-center space-x-3">
+          <!-- Customizable Sidebar Logo with default icon fallback -->
+          <div class="relative flex items-center justify-center">
+            <img id="app-logo-img" src="/logo.png" class="w-9 h-9 rounded-lg object-contain" onerror="this.style.display='none'; document.getElementById('app-logo-fallback').classList.remove('hidden')">
+            <div id="app-logo-fallback" class="hidden bg-blue-600 text-white p-2 rounded-lg flex items-center justify-center">
+              <i class="fa-solid fa-video text-lg"></i>
+            </div>
+          </div>
+          <div>
+            <h1 id="app-title-name" class="font-bold text-lg leading-tight">Web-CCTV</h1>
+            <span id="app-title-sub" class="text-xs text-slate-400">HG680P</span>
+          </div>
+        </div>
+        
+        <!-- Dark Mode & Close Buttons -->
+        <div class="flex items-center space-x-1.5">
+          <!-- Dark Mode/Light Mode Toggle Button -->
+          <button type="button" onclick="toggleTheme()" class="text-slate-400 hover:text-white hover:bg-slate-800 p-2 rounded-lg transition border-0 bg-transparent cursor-pointer" title="Ganti Tema Gelap/Terang">
+            <i id="theme-toggle-icon" class="fa-solid fa-sun text-sm text-amber-400"></i>
+          </button>
+          
+          <!-- Close Menu Button (Mobile Only) -->
+          <button type="button" onclick="toggleMobileSidebar()" class="md:hidden text-slate-400 hover:text-white p-1.5 rounded-lg active:bg-slate-800 border-0 bg-transparent cursor-pointer">
+            <i class="fa-solid fa-xmark text-xl"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Navigation Menu (Desktop & Drawer list) -->
+      <nav id="nav-menu" class="flex-1 flex flex-col p-3 space-y-1 overflow-y-auto">
+        <button data-view="dashboard" class="nav-item admin-only hidden flex items-center space-x-3 px-4 py-2.5 rounded-lg text-sm font-medium transition text-slate-300 hover:bg-slate-800 hover:text-white">
+          <i class="fa-solid fa-chart-line w-5 text-center"></i>
+          <span data-i18n="menu_dashboard">Dasbor</span>
+        </button>
+        <button data-view="live" class="nav-item flex items-center space-x-3 px-4 py-2.5 rounded-lg text-sm font-medium transition text-slate-300 hover:bg-slate-800 hover:text-white">
+          <i class="fa-solid fa-tv w-5 text-center"></i>
+          <span data-i18n="menu_live">Live CCTV</span>
+        </button>
+        <button data-view="map" class="nav-item flex items-center space-x-3 px-4 py-2.5 rounded-lg text-sm font-medium transition text-slate-300 hover:bg-slate-800 hover:text-white">
+          <i class="fa-solid fa-map-location-dot w-5 text-center"></i>
+          <span data-i18n="menu_map">Peta Lokasi</span>
+        </button>
+        <button data-view="records" class="nav-item logged-in-only hidden flex items-center space-x-3 px-4 py-2.5 rounded-lg text-sm font-medium transition text-slate-300 hover:bg-slate-800 hover:text-white">
+          <i class="fa-solid fa-compact-disc w-5 text-center"></i>
+          <span data-i18n="menu_records">Rekaman</span>
+        </button>
+        <!-- Admin only links -->
+        <button data-view="cameras" class="nav-item admin-only hidden flex items-center space-x-3 px-4 py-2.5 rounded-lg text-sm font-medium transition text-slate-300 hover:bg-slate-800 hover:text-white">
+          <i class="fa-solid fa-camera w-5 text-center"></i>
+          <span data-i18n="menu_cameras">Kelola Kamera</span>
+        </button>
+        <button data-view="network" class="nav-item admin-only hidden flex items-center space-x-3 px-4 py-2.5 rounded-lg text-sm font-medium transition text-slate-300 hover:bg-slate-800 hover:text-white">
+          <i class="fa-solid fa-network-wired w-5 text-center"></i>
+          <span data-i18n="menu_network">Network</span>
+        </button>
+        <button data-view="users" class="nav-item admin-only hidden flex items-center space-x-3 px-4 py-2.5 rounded-lg text-sm font-medium transition text-slate-300 hover:bg-slate-800 hover:text-white">
+          <i class="fa-solid fa-users w-5 text-center"></i>
+          <span data-i18n="menu_users">Kelola User</span>
+        </button>
+        <button data-view="activity" class="nav-item admin-only hidden flex items-center space-x-3 px-4 py-2.5 rounded-lg text-sm font-medium transition text-slate-300 hover:bg-slate-800 hover:text-white">
+          <i class="fa-solid fa-clipboard-list w-5 text-center"></i>
+          <span data-i18n="menu_activity">Log Aktivitas</span>
+        </button>
+        <button data-view="settings" class="nav-item logged-in-only hidden flex items-center space-x-3 px-4 py-2.5 rounded-lg text-sm font-medium transition text-slate-300 hover:bg-slate-800 hover:text-white">
+          <i class="fa-solid fa-sliders w-5 text-center"></i>
+          <span data-i18n="menu_settings">Pengaturan</span>
+        </button>
+      </nav>
+
+      <!-- Sidebar Footer -->
+      <div class="p-4 border-t border-slate-800 bg-slate-950 flex flex-col space-y-3 flex-shrink-0">
+        <!-- Logged In User Footer (Shown only if logged in) -->
+        <div id="footer-user-panel" class="hidden space-y-3">
+          <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center border border-slate-700">
+              <i class="fa-solid fa-user text-slate-300"></i>
+            </div>
+            <div class="overflow-hidden">
+              <h4 id="user-display-name" class="font-semibold text-sm truncate">User</h4>
+              <span id="user-display-role" class="text-xs text-slate-400 capitalize">Role</span>
+            </div>
+          </div>
+          <button onclick="handleLogout()" class="w-full flex items-center justify-center space-x-2 bg-slate-800 hover:bg-red-900 hover:text-white text-red-400 py-2 rounded-lg text-sm font-semibold transition border border-slate-700 hover:border-red-800 cursor-pointer">
+            <i class="fa-solid fa-right-from-bracket"></i>
+            <span data-i18n="logout">Keluar</span>
+          </button>
+        </div>
+        
+        <!-- Guest / Public Footer (Shown if not logged in) -->
+        <div id="footer-guest-panel" class="space-y-2">
+          <div class="text-center text-[10px] text-slate-500 font-bold uppercase tracking-wide">Mode Akses Publik</div>
+          <button onclick="showLoginModal()" class="w-full flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-semibold transition cursor-pointer border-0 shadow-md">
+            <i class="fa-solid fa-key"></i>
+            <span>Masuk Admin</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 flex flex-col overflow-hidden bg-slate-950 relative">
+      <!-- Floating Sidebar Toggle Button (Hanya tampil di Desktop/md:flex agar tidak mengganggu di HP) -->
+      <button type="button" onclick="toggleSidebar()" id="sidebar-toggle-btn" class="hidden md:flex absolute top-4 left-4 z-40 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white w-9 h-9 rounded-xl flex items-center justify-center border border-slate-800 shadow-xl transition-all duration-200 cursor-pointer" title="Sembunyikan/Tampilkan Sidebar">
+        <i class="fa-solid fa-bars text-sm"></i>
+      </button>
+      
+      <!-- Current View Content Container -->
+      <div class="flex-1 overflow-y-auto p-4 md:p-6" id="view-container">
+
+        <!-- ================= VIEW: DASHBOARD ================= -->
+        <section id="view-dashboard" class="view-section hidden space-y-6">
+          <div class="flex flex-col md:flex-row md:items-center md:justify-between space-y-2 md:space-y-0">
+            <div>
+              <h2 class="text-xl md:text-2xl font-bold tracking-tight" data-i18n="dash_welcome">Dasbor Pemantauan</h2>
+              <p class="text-slate-400 text-xs md:text-sm" data-i18n="dash_sub">Statistik real-time sistem dan status koneksi kamera CCTV.</p>
+            </div>
+            <div id="dash-clock" class="text-xs md:text-sm font-mono text-slate-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg flex items-center space-x-2 self-start md:self-auto flex-shrink-0">
+              <i class="fa-solid fa-clock text-blue-500"></i>
+              <span>--:--:--</span>
+            </div>
+          </div>
+
+          <!-- Stats Grid -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+            <div class="bg-slate-900 border border-slate-800 p-3 md:p-4 rounded-xl flex items-center space-x-3 md:space-x-4">
+              <div class="p-2 md:p-3 bg-blue-500/10 text-blue-500 rounded-lg">
+                <i class="fa-solid fa-video text-lg md:text-xl w-5 md:w-6 text-center"></i>
+              </div>
+              <div>
+                <span class="text-[10px] md:text-xs text-slate-400 block" data-i18n="stat_total_cams">Total Kamera</span>
+                <span id="stat-total-cams" class="text-lg md:text-2xl font-bold">0</span>
+              </div>
+            </div>
+            <div class="bg-slate-900 border border-slate-800 p-3 md:p-4 rounded-xl flex items-center space-x-3 md:space-x-4">
+              <div class="p-2 md:p-3 bg-emerald-500/10 text-emerald-500 rounded-lg">
+                <i class="fa-solid fa-circle-check text-lg md:text-xl w-5 md:w-6 text-center"></i>
+              </div>
+              <div>
+                <span class="text-[10px] md:text-xs text-slate-400 block" data-i18n="stat_online">Online</span>
+                <span id="stat-online-cams" class="text-lg md:text-2xl font-bold text-emerald-500">0</span>
+              </div>
+            </div>
+            <div class="bg-slate-900 border border-slate-800 p-3 md:p-4 rounded-xl flex items-center space-x-3 md:space-x-4">
+              <div class="p-2 md:p-3 bg-red-500/10 text-red-500 rounded-lg">
+                <i class="fa-solid fa-circle-xmark text-lg md:text-xl w-5 md:w-6 text-center animate-pulse"></i>
+              </div>
+              <div>
+                <span class="text-[10px] md:text-xs text-slate-400 block" data-i18n="stat_offline">Offline</span>
+                <span id="stat-offline-cams" class="text-lg md:text-2xl font-bold text-red-500">0</span>
+              </div>
+            </div>
+            <div class="bg-slate-900 border border-slate-800 p-3 md:p-4 rounded-xl flex items-center space-x-3 md:space-x-4">
+              <div class="p-2 md:p-3 bg-purple-500/10 text-purple-500 rounded-lg">
+                <i class="fa-solid fa-tower-broadcast text-lg md:text-xl w-5 md:w-6 text-center"></i>
+              </div>
+              <div>
+                <span class="text-[10px] md:text-xs text-slate-400 block" data-i18n="stat_streaming">Transcode Aktif</span>
+                <span id="stat-streaming-now" class="text-lg md:text-2xl font-bold text-purple-400">0</span>
+              </div>
+            </div>
+            <div class="bg-slate-900 border border-slate-800 p-3 md:p-4 rounded-xl flex items-center space-x-3 md:space-x-4">
+              <div class="p-2 md:p-3 bg-rose-500/10 text-rose-500 rounded-lg">
+                <i class="fa-solid fa-record-vinyl text-lg md:text-xl w-5 md:w-6 text-center animate-pulse"></i>
+              </div>
+              <div>
+                <span class="text-[10px] md:text-xs text-slate-400 block" data-i18n="stat_recording">Perekaman Aktif</span>
+                <span id="stat-recording-now" class="text-lg md:text-2xl font-bold text-rose-500">0</span>
+              </div>
+            </div>
+            <div class="bg-slate-900 border border-slate-800 p-3 md:p-4 rounded-xl flex items-center space-x-3 md:space-x-4">
+              <div class="p-2 md:p-3 bg-amber-500/10 text-amber-500 rounded-lg">
+                <i class="fa-solid fa-database text-lg md:text-xl w-5 md:w-6 text-center"></i>
+              </div>
+              <div>
+                <span class="text-[10px] md:text-xs text-slate-400 block" data-i18n="stat_records_size">Penyimpanan</span>
+                <span id="stat-records-size" class="text-lg md:text-2xl font-bold">0 MB</span>
+              </div>
+            </div>
+            <div class="bg-slate-900 border border-slate-800 p-3 md:p-4 rounded-xl flex items-center space-x-3 md:space-x-4 col-span-2">
+              <div class="p-2 md:p-3 bg-slate-500/10 text-slate-400 rounded-lg">
+                <i class="fa-solid fa-server text-lg md:text-xl w-5 md:w-6 text-center"></i>
+              </div>
+              <div class="flex-1 grid grid-cols-2 gap-2 text-[10px] md:text-xs">
+                <div>
+                  <span class="text-slate-400 block font-semibold" data-i18n="stat_host">Platform</span>
+                  <span class="font-bold text-slate-200 truncate block">HG680P</span>
+                </div>
+                <div>
+                  <span class="text-slate-400 block font-semibold" data-i18n="stat_status">Status Layanan</span>
+                  <span class="font-semibold text-emerald-500 flex items-center space-x-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                    <span>Running</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Main Dashboard Sections -->
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 flex flex-col space-y-4">
+              <h3 class="font-bold text-base md:text-lg border-b border-slate-800 pb-2 text-slate-200" data-i18n="dash_quick_status">Status Deteksi Koneksi Kamera</h3>
+              <div id="dash-cams-status-list" class="divide-y divide-slate-800 overflow-y-auto max-h-96 pr-2 space-y-1">
+                <div class="text-slate-500 text-sm py-4 text-center" data-i18n="loading">Memuat...</div>
+              </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 flex flex-col space-y-4 text-xs md:text-sm text-slate-300">
+              <h3 class="font-bold text-base md:text-lg text-white border-b border-slate-800 pb-2" data-i18n="dash_sys_info">Spesifikasi & Informasi</h3>
+              <ul class="space-y-3">
+                <li class="flex justify-between border-b border-slate-800 pb-1.5">
+                  <span class="text-slate-400">Beban CPU STB</span>
+                  <span id="sys-cpu" class="font-mono font-bold text-slate-200">--%</span>
+                </li>
+                <li class="flex justify-between border-b border-slate-800 pb-1.5">
+                  <span class="text-slate-400">Suhu CPU STB</span>
+                  <span id="sys-temp" class="font-mono font-bold text-amber-500">-- °C</span>
+                </li>
+                <li class="flex justify-between border-b border-slate-800 pb-1.5">
+                  <span class="text-slate-400">Memori RAM</span>
+                  <span id="sys-ram" class="font-mono font-semibold text-slate-200">-- / -- GB</span>
+                </li>
+                <li class="flex justify-between border-b border-slate-800 pb-1.5 gap-3">
+                  <span class="text-slate-400">Jam Rekaman STB</span>
+                  <span class="text-right">
+                    <span id="sys-record-time" class="font-mono font-semibold text-slate-200 block">--</span>
+                    <span id="sys-time-sync" class="text-[9px] text-amber-400 block">Memeriksa NTP...</span>
+                  </span>
+                </li>
+                <li class="flex justify-between border-b border-slate-800 pb-1.5">
+                  <span class="text-slate-400">NodeJS</span>
+                  <span class="font-mono">v18 / v20</span>
+                </li>
+                <li class="flex justify-between border-b border-slate-800 pb-1.5">
+                  <span class="text-slate-400" data-i18n="sys_db">Database</span>
+                  <span class="font-semibold text-slate-200">SQLite (WAL Mode)</span>
+                </li>
+                <li class="flex justify-between border-b border-slate-800 pb-1.5">
+                  <span class="text-slate-400">FFmpeg Transcoder</span>
+                  <span class="text-blue-400 font-semibold">libx264 Ultrafast</span>
+                </li>
+                <li class="flex justify-between">
+                  <span class="text-slate-400" data-i18n="sys_resolution">Resolusi Default</span>
+                  <span>960x540 @15fps</span>
+                </li>
+              </ul>
+              <div class="bg-blue-950/40 border border-blue-900/50 p-3 rounded-lg text-[10px] md:text-xs leading-relaxed text-blue-300">
+                <i class="fa-solid fa-circle-info mr-1 text-blue-400"></i>
+                <span data-i18n="dash_sys_hint">Gunakan RTSP Transcode hanya untuk kamera aktif di browser. Gunakan HLS direct (.m3u8) atau YouTube Live Embed untuk menghemat beban CPU STB Anda secara dramatis.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= VIEW: LIVE CCTV GRID ================= -->
+        <section id="view-live" class="view-section hidden space-y-4">
+          <!-- Filters Toolbar -->
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 bg-slate-900 border border-slate-800 p-3 md:p-4 rounded-xl shadow-lg">
+            <div class="flex flex-1 flex-col sm:flex-row gap-3">
+              <div class="relative flex-1">
+                <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                <input type="text" id="live-search" class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition placeholder-slate-500" placeholder="Cari nama kamera atau lokasi..." data-i18n-placeholder="search_placeholder">
+              </div>
+              <div class="relative w-full sm:w-48">
+                <select id="live-filter-location" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 transition appearance-none cursor-pointer">
+                  <option value="" data-i18n="all_locations">Semua Lokasi</option>
+                </select>
+                <i class="fa-solid fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between sm:justify-start space-x-4 bg-slate-950 border border-slate-800 px-4 py-2 rounded-lg flex-shrink-0">
+              <div class="flex items-center space-x-2">
+                <i class="fa-solid fa-circle-play text-red-500 text-xs animate-ping"></i>
+                <span class="text-xs md:text-sm font-semibold text-slate-300" data-i18n="live_in_grid">Live di Grid</span>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" id="live-grid-toggle" class="sr-only peer" onchange="toggleLiveInGrid(this)">
+                <div class="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600 peer-checked:after:bg-white peer-checked:after:border-white"></div>
+              </label>
+            </div>
+          </div>
+
+          <div id="live-cameras-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6"></div>
+        </section>
+
+        <!-- ================= VIEW: MAP ================= -->
+        <section id="view-map" class="view-section hidden space-y-4">
+          <div class="flex flex-col md:flex-row md:items-center md:justify-between space-y-1 md:space-y-0 flex-shrink-0">
+            <div>
+              <h2 class="text-xl md:text-2xl font-bold tracking-tight" data-i18n="map_title">Peta Kamera</h2>
+              <p class="text-slate-400 text-xs md:text-sm" data-i18n="map_sub">Menampilkan lokasi geografis kamera CCTV beserta status terbarunya.</p>
+            </div>
+            <div class="flex items-center space-x-3 text-[10px] md:text-xs bg-slate-900 border border-slate-800 p-2 rounded-lg self-start md:self-auto flex-shrink-0">
+              <span class="flex items-center space-x-1"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span><span data-i18n="online">Online</span></span>
+              <span class="flex items-center space-x-1"><span class="w-2.5 h-2.5 rounded-full bg-red-500"></span><span data-i18n="offline">Offline</span></span>
+              <span class="flex items-center space-x-1"><span class="w-2.5 h-2.5 rounded-full bg-slate-500"></span><span data-i18n="unknown">Tidak Diketahui</span></span>
+            </div>
+          </div>
+
+          <!-- Grid Layout -->
+          <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <!-- Sidebar: Cameras List -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col h-[400px] lg:h-[500px]">
+              <div class="mb-3">
+                <h3 class="font-bold text-sm text-slate-200 mb-2 flex items-center justify-between">
+                  <span data-i18n="camera_list_title">Daftar Kamera</span>
+                  <i class="fa-solid fa-video text-slate-500 text-xs"></i>
+                </h3>
+                <div class="relative">
+                  <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+                  <input type="text" id="map-search" class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 transition placeholder-slate-500" placeholder="Cari kamera..." data-i18n-placeholder="search_placeholder_map">
+                </div>
+              </div>
+              <div id="map-cameras-list" class="flex-1 overflow-y-auto space-y-2 pr-1 scrollbar-none">
+                <div class="text-slate-500 text-xs py-4 text-center" data-i18n="loading">Memuat kamera...</div>
+              </div>
+            </div>
+
+            <!-- Map Column -->
+            <div class="lg:col-span-3 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden h-[400px] lg:h-[500px] relative z-10">
+              <div id="map" class="w-full h-full"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= VIEW: RECORDINGS ================= -->
+        <section id="view-records" class="view-section hidden space-y-6">
+          <div class="flex flex-col md:flex-row md:items-center md:justify-between space-y-2 md:space-y-0">
+            <div>
+              <h2 class="text-xl md:text-2xl font-bold tracking-tight" data-i18n="records_title">File Rekaman MP4</h2>
+              <p class="text-slate-400 text-xs md:text-sm" data-i18n="records_sub">Unduh atau tonton rekaman terjadwal dan manual kamera CCTV.</p>
+            </div>
+            <div class="flex items-center space-x-3 self-start md:self-auto w-full md:w-auto mt-2 md:mt-0">
+              <!-- Trigger manual record form button -->
+              <button id="btn-show-rec-form" onclick="toggleManualRecordForm()" class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-xs font-semibold flex items-center space-x-1.5 border-0 shadow-lg shadow-red-500/10 cursor-pointer">
+                <i class="fa-solid fa-circle"></i>
+                <span>Record Manual</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Filters Toolbar (Responsive Wrapping Container) -->
+          <div class="flex flex-wrap items-center gap-3 bg-slate-900 border border-slate-800 p-3 md:p-4 rounded-xl shadow-md w-full">
+            <!-- Camera filter -->
+            <div class="relative w-full sm:w-48">
+              <select id="records-filter-camera" class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-3 pr-8 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 transition appearance-none cursor-pointer" onchange="loadRecords()">
+                <option value="" data-i18n="all_cameras">Semua Kamera</option>
+              </select>
+              <i class="fa-solid fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
+            </div>
+            
+            <!-- Date filter -->
+            <div class="relative w-36 flex-shrink-0">
+              <input type="date" id="records-filter-date" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer" onchange="loadRecords()">
+            </div>
+            
+            <!-- Time filter -->
+            <div class="relative w-28 flex-shrink-0">
+              <input type="time" id="records-filter-time" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer" onchange="loadRecords()">
+            </div>
+
+            <!-- Reset filters button -->
+            <button onclick="resetRecordsFilters()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-xs md:text-sm font-semibold transition border border-slate-700 cursor-pointer flex items-center justify-center" title="Reset Filters">
+              <i class="fa-solid fa-rotate-left"></i>
+            </button>
+
+            <!-- Delete all recordings button (Admin only) -->
+            <button id="btn-delete-all-records" onclick="handleDeleteAllRecords()" class="admin-only hidden bg-red-950/60 hover:bg-red-900/80 text-red-400 px-3 py-2 rounded-lg text-xs md:text-sm font-semibold transition border border-red-900/50 cursor-pointer flex items-center justify-center space-x-1.5" title="Hapus Semua Rekaman">
+              <i class="fa-solid fa-dumpster-fire"></i>
+              <span data-i18n="delete_all_records">Hapus Semua</span>
+            </button>
+          </div>
+
+          <!-- Hard Disk Storage status panel -->
+          <div id="storage-status-panel" class="bg-slate-900 border border-slate-800 p-4 rounded-xl shadow-lg space-y-3">
+            <div class="flex justify-between items-center flex-wrap gap-2">
+              <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+                <i class="fa-solid fa-hard-drive text-blue-500"></i>
+                <span data-i18n="storage_status_title">Status Penyimpanan Harddisk</span>
+              </h3>
+              <span id="storage-warning-badge" class="hidden bg-red-500/15 text-red-400 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider animate-pulse flex items-center space-x-1">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <span data-i18n="storage_full_warn">Penyimpanan Hampir Penuh!</span>
+              </span>
+            </div>
+            
+            <!-- Progress Bar of storage -->
+            <div class="space-y-1.5">
+              <div class="flex justify-between text-xs text-slate-400">
+                <span id="storage-used-text">Memuat status penyimpanan...</span>
+              </div>
+              <div class="w-full bg-slate-950 rounded-full h-3 border border-slate-800 overflow-hidden p-0.5">
+                <div id="storage-progress-bar" class="bg-blue-600 h-2 rounded-full transition-all duration-500" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Manual Record Form Panel (Hidden by default) -->
+          <div id="manual-record-form-panel" class="hidden bg-slate-900 border border-slate-800 p-4 rounded-xl shadow-lg space-y-3 max-w-lg">
+            <h3 class="font-bold text-sm text-slate-200" data-i18n="manual_recorder">Mulai Perekaman Manual</h3>
+            <form onsubmit="handleStartManualRecordFromPage(event)" class="flex flex-wrap items-end gap-3">
+              <div class="flex-1 min-w-[150px]">
+                <label class="block text-[10px] text-slate-400 uppercase font-semibold mb-1">Pilih Kamera</label>
+                <select id="rec-page-cam-select" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500">
+                  <!-- Loaded dynamically -->
+                </select>
+              </div>
+              <div class="w-24">
+                <label class="block text-[10px] text-slate-400 uppercase font-semibold mb-1">Durasi (Detik)</label>
+                <input type="number" id="rec-page-duration" value="120" min="10" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono">
+              </div>
+              <button type="submit" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition border-0 cursor-pointer">
+                Mulai
+              </button>
+            </form>
+          </div>
+
+          <!-- Active Recordings List Panel -->
+          <div id="active-recordings-panel" class="hidden bg-slate-900 border border-red-500/30 p-4 rounded-xl space-y-2.5 border-l-4 border-l-red-500 shadow-lg">
+            <h4 class="text-xs font-bold text-red-500 uppercase tracking-wider flex items-center space-x-1.5">
+              <span class="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
+              <span>Perekaman Aktif Sekarang</span>
+            </h4>
+            <div id="active-recordings-list" class="divide-y divide-slate-800/60 max-h-48 overflow-y-auto pr-1"></div>
+          </div>
+
+          <!-- Records Table -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs md:text-sm text-slate-300 border-collapse">
+                <thead class="bg-slate-950 text-slate-400 text-[10px] md:text-xs uppercase font-semibold border-b border-slate-800">
+                  <tr>
+                    <th class="p-3 md:p-4" data-i18n="camera_name">Nama Kamera</th>
+                    <th class="p-3 md:p-4 hidden md:table-cell" data-i18n="rec_preview">Pratinjau</th>
+                    <th class="p-3 md:p-4" data-i18n="rec_start">Waktu Mulai</th>
+                    <th class="p-3 md:p-4 hidden sm:table-cell" data-i18n="rec_end">Waktu Selesai</th>
+                    <th class="p-3 md:p-4" data-i18n="rec_duration">Durasi</th>
+                    <th class="p-3 md:p-4 hidden sm:table-cell" data-i18n="rec_size">Ukuran (MB)</th>
+                    <th class="p-3 md:p-4 text-center" data-i18n="status">Status</th>
+                    <th class="p-3 md:p-4 text-right" data-i18n="action">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="records-table-body" class="divide-y divide-slate-800/60"></tbody>
+              </table>
+            </div>
+            <div id="records-empty" class="hidden p-8 text-center text-slate-500 text-xs md:text-sm" data-i18n="records_empty">Tidak ada file rekaman ditemukan.</div>
+          </div>
+        </section>
+
+        <!-- ================= VIEW: CAMERAS MANAGEMENT ================= -->
+        <section id="view-cameras" class="view-section admin-only hidden space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-2 sm:space-y-0">
+            <div>
+              <h2 class="text-xl md:text-2xl font-bold tracking-tight" data-i18n="cameras_title">Manajemen Kamera</h2>
+              <p class="text-slate-400 text-xs md:text-sm" data-i18n="cameras_sub_admin">Tambahkan, ubah, atau hapus konfigurasi kamera CCTV dalam sistem.</p>
+            </div>
+            <button onclick="openCameraFormModal()" class="flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition shadow-md self-start sm:self-auto cursor-pointer border-0">
+              <i class="fa-solid fa-plus"></i>
+              <span data-i18n="add_camera">Tambah Kamera</span>
+            </button>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs md:text-sm text-slate-300 border-collapse">
+                <thead class="bg-slate-950 text-slate-400 text-[10px] md:text-xs uppercase font-semibold border-b border-slate-800">
+                  <tr>
+                    <th class="p-3 md:p-4" data-i18n="camera_name">Nama Kamera</th>
+                    <th class="p-3 md:p-4" data-i18n="location">Lokasi</th>
+                    <th class="p-3 md:p-4 hidden sm:table-cell" data-i18n="stream_type">Tipe Stream</th>
+                    <th class="p-3 md:p-4 hidden md:table-cell" data-i18n="net_address">Alamat IP / Jaringan</th>
+                    <th class="p-3 md:p-4 hidden md:table-cell" data-i18n="channel">Chan</th>
+                    <th class="p-3 md:p-4" data-i18n="visibility">Visibilitas</th>
+                    <th class="p-3 md:p-4 text-center" data-i18n="active">Aktif</th>
+                    <th class="p-3 md:p-4 hidden lg:table-cell" data-i18n="records">Schedules</th>
+                    <th class="p-3 md:p-4 text-right" data-i18n="action">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="cameras-table-body" class="divide-y divide-slate-800/60"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= VIEW: USERS MANAGEMENT ================= -->
+        <!-- ============ v2.9.2 : MENU NETWORK ============ -->
+        <section id="view-network" class="view-section admin-only hidden space-y-6">
+
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h2 class="text-lg md:text-xl font-bold text-white flex items-center space-x-2">
+                <i class="fa-solid fa-network-wired text-blue-400"></i>
+                <span data-i18n="net_menu_title">Network</span>
+              </h2>
+              <p class="text-[11px] md:text-xs text-slate-400 mt-0.5" data-i18n="net_menu_sub">
+                Atur peran eth (WAN/internet) dan port LAN ke switch hub, lalu kelola IP kamera — semua di satu tempat.
+              </p>
+            </div>
+            <button onclick="loadNetworkMenu()" class="self-start sm:self-auto flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg text-xs font-semibold transition border border-slate-700 cursor-pointer">
+              <i class="fa-solid fa-rotate"></i><span data-i18n="net_refresh">Muat Ulang</span>
+            </button>
+          </div>
+
+          <!-- Peringatan mode -->
+          <div class="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 md:p-4 text-[11px] md:text-xs text-amber-200 space-y-1">
+            <div class="font-bold flex items-center gap-2">
+              <i class="fa-solid fa-shield-halved"></i>
+              <span data-i18n="net_mode_title">Mode: Siapkan Saja (STB tidak diubah otomatis)</span>
+            </div>
+            <p data-i18n="net_mode_body">
+              Halaman ini <b>tidak pernah</b> menulis konfigurasi jaringan ke STB. Yang dihasilkan adalah
+              teks konfigurasi siap salin-tempel. Ini disengaja: salah isi gateway dari web bisa memutus
+              akses ke STB tanpa jalan kembali. Pengecualian: mengganti <b>IP kamera</b> lewat ONVIF benar-benar
+              mengubah kamera, dan selalu meminta konfirmasi lebih dulu.
+            </p>
+          </div>
+
+          <!-- ===== 1. TOPOLOGI & PERAN ANTARMUKA ===== -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg">
+            <h3 class="font-bold text-white flex items-center space-x-2 text-sm md:text-base">
+              <i class="fa-solid fa-sitemap text-blue-400"></i>
+              <span data-i18n="net_topology_title">1. Topologi &amp; Peran Antarmuka</span>
+            </h3>
+            <p class="text-[11px] text-slate-400" data-i18n="net_topology_hint">
+              Bebas: sumber internet bisa dari <b>modem GSM/4G di port USB</b> (muncul sebagai <span class="font-mono">usb0</span> / <span class="font-mono">enx…</span>),
+              dari <b>WiFi</b>, atau dari <b>port LAN</b>. Port yang tersisa diarahkan ke <b>switch hub</b> supaya bisa banyak kamera.
+            </p>
+
+            <!-- Deteksi modem GSM/4G -->
+            <div id="net-modem" class="space-y-2 bg-slate-950/50 border border-slate-800 rounded-lg p-3"></div>
+
+            <!-- Preset topologi -->
+            <div>
+              <div class="text-[10px] text-slate-500 uppercase font-semibold mb-1.5" data-i18n="net_preset_title">Preset Topologi (klik untuk mengisi otomatis)</div>
+              <div id="net-presets" class="grid grid-cols-1 sm:grid-cols-3 gap-2"></div>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-[11px] md:text-xs text-slate-300 border-collapse">
+                <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase font-semibold border-b border-slate-800">
+                  <tr>
+                    <th class="p-2.5" data-i18n="net_col_iface">Antarmuka</th>
+                    <th class="p-2.5" data-i18n="net_col_now">Alamat Sekarang</th>
+                    <th class="p-2.5" data-i18n="net_col_medium">Medium</th>
+                    <th class="p-2.5" data-i18n="net_col_role">Peran</th>
+                    <th class="p-2.5" data-i18n="net_col_method">Metode</th>
+                    <th class="p-2.5" data-i18n="net_col_ip">IP</th>
+                    <th class="p-2.5" data-i18n="net_col_prefix">Prefix</th>
+                    <th class="p-2.5" data-i18n="net_col_gw">Gateway</th>
+                    <th class="p-2.5" data-i18n="net_col_dns">DNS</th>
+                  </tr>
+                </thead>
+                <tbody id="net-iface-body"></tbody>
+              </table>
+            </div>
+            <div id="net-iface-notes" class="space-y-1.5"></div>
+            <div class="flex flex-wrap gap-2 pt-1">
+              <button onclick="saveNetPlan()" class="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                <i class="fa-solid fa-floppy-disk"></i><span data-i18n="net_save_plan">Simpan Rencana</span>
+              </button>
+              <button onclick="generateNetConfig()" class="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                <i class="fa-solid fa-file-code"></i><span data-i18n="net_generate">Buat Konfigurasi</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- ===== 2. KONFIGURASI ETH / WAN ===== -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-3 shadow-lg">
+            <h3 class="font-bold text-white flex items-center space-x-2 text-sm md:text-base">
+              <i class="fa-solid fa-globe text-emerald-400"></i>
+              <span data-i18n="net_wan_title">2. Konfigurasi ETH / WAN (Sumber Internet)</span>
+            </h3>
+            <div id="net-wan-info" class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]"></div>
+            <div class="flex flex-wrap gap-2">
+              <button onclick="testNetInternet()" class="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg text-xs font-semibold transition border border-slate-700 cursor-pointer">
+                <i class="fa-solid fa-tower-broadcast"></i><span data-i18n="net_test_inet">Uji Internet</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- ===== 3. KONFIGURASI PORT LAN (SWITCH HUB) ===== -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-3 shadow-lg">
+            <h3 class="font-bold text-white flex items-center space-x-2 text-sm md:text-base">
+              <i class="fa-solid fa-ethernet text-sky-400"></i>
+              <span data-i18n="net_lan_title">3. Konfigurasi Port LAN ke Switch Hub</span>
+            </h3>
+            <p class="text-[11px] text-slate-400" data-i18n="net_lan_hint">
+              Antarmuka LAN wajib statis dan <b>tanpa gateway</b>. Gateway di LAN akan merebut rute default dari WAN dan internet mati.
+            </p>
+            <div id="net-lan-info" class="space-y-2 text-[11px]"></div>
+          </div>
+
+          <!-- ===== 4. KONFIGURASI IP KAMERA ===== -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg">
+            <h3 class="font-bold text-white flex items-center space-x-2 text-sm md:text-base">
+              <i class="fa-solid fa-video text-rose-400"></i>
+              <span data-i18n="net_cam_title">4. Konfigurasi IP Kamera</span>
+            </h3>
+
+            <div class="bg-slate-950/60 border border-slate-800 rounded-lg p-3 space-y-2">
+              <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 items-end">
+                <div class="col-span-2 sm:col-span-1">
+                  <label class="block text-[10px] text-slate-500 uppercase font-semibold mb-1" data-i18n="net_scan_iface">Antarmuka / Subnet</label>
+                  <select id="net-scan-iface" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 focus:outline-none"></select>
+                </div>
+                <div>
+                  <label class="block text-[10px] text-slate-500 uppercase font-semibold mb-1">Network</label>
+                  <input type="text" id="net-scan-network" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 font-mono focus:outline-none" placeholder="192.168.10.0">
+                </div>
+                <div>
+                  <label class="block text-[10px] text-slate-500 uppercase font-semibold mb-1">Prefix</label>
+                  <input type="number" id="net-scan-prefix" value="24" min="8" max="32" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 font-mono focus:outline-none">
+                </div>
+                <div>
+                  <label class="block text-[10px] text-slate-500 uppercase font-semibold mb-1" data-i18n="net_scan_timeout">Timeout (ms)</label>
+                  <input type="number" id="net-scan-timeout" value="700" min="150" max="5000" step="50" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 font-mono focus:outline-none">
+                </div>
+                <div class="flex gap-2">
+                  <button onclick="startNetScan()" id="net-scan-btn" class="flex-1 flex items-center justify-center space-x-2 bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                    <i class="fa-solid fa-radar"></i><span data-i18n="net_scan_start">Pindai</span>
+                  </button>
+                  <button onclick="abortNetScan()" id="net-scan-abort" class="hidden flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer border-0" title="Hentikan">
+                    <i class="fa-solid fa-stop"></i>
+                  </button>
+                </div>
+              </div>
+              <div id="net-scan-progress" class="hidden">
+                <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                  <div id="net-scan-bar" class="bg-rose-500 h-1.5 transition-all duration-200" style="width:0%"></div>
+                </div>
+                <div id="net-scan-progress-text" class="text-[10px] text-slate-400 mt-1 font-mono"></div>
+              </div>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-[11px] md:text-xs text-slate-300 border-collapse">
+                <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase font-semibold border-b border-slate-800">
+                  <tr>
+                    <th class="p-2.5">IP</th>
+                    <th class="p-2.5" data-i18n="net_col_ports">Port Terbuka</th>
+                    <th class="p-2.5" data-i18n="net_col_vendor">Perkiraan</th>
+                    <th class="p-2.5" data-i18n="net_col_ping">Latensi</th>
+                    <th class="p-2.5 text-right" data-i18n="net_col_action">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="net-scan-body">
+                  <tr><td colspan="5" class="p-4 text-slate-500 text-center" data-i18n="net_scan_empty">Belum ada pemindaian. Pilih subnet lalu klik Pindai.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="border-t border-slate-800 pt-3">
+              <h4 class="font-semibold text-slate-200 text-xs mb-2 flex items-center gap-2">
+                <i class="fa-solid fa-camera text-slate-400"></i>
+                <span data-i18n="net_cam_registered">Kamera Terdaftar per Subnet LAN</span>
+              </h4>
+              <div id="net-cams-by-lan" class="space-y-2 text-[11px]"></div>
+            </div>
+          </div>
+
+          <!-- ===== HASIL KONFIGURASI ===== -->
+          <div id="net-config-output" class="hidden bg-slate-900 border border-emerald-700/40 rounded-xl p-4 md:p-6 space-y-3 shadow-lg">
+            <h3 class="font-bold text-white flex items-center space-x-2 text-sm md:text-base">
+              <i class="fa-solid fa-file-code text-emerald-400"></i>
+              <span data-i18n="net_output_title">Konfigurasi Siap Salin</span>
+            </h3>
+            <div id="net-config-issues" class="space-y-1.5"></div>
+            <div class="flex flex-wrap gap-1.5" id="net-config-tabs">
+              <button onclick="showNetConfig('etc_network_interfaces')" data-cfg="etc_network_interfaces" class="net-cfg-tab px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer border border-slate-700 bg-blue-600 text-white">/etc/network/interfaces</button>
+              <button onclick="showNetConfig('netplan_yaml')" data-cfg="netplan_yaml" class="net-cfg-tab px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer border border-slate-700 bg-slate-800 text-slate-300">netplan YAML</button>
+              <button onclick="showNetConfig('nmcli')" data-cfg="nmcli" class="net-cfg-tab px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer border border-slate-700 bg-slate-800 text-slate-300">nmcli</button>
+              <button onclick="showNetConfig('dnsmasq')" data-cfg="dnsmasq" class="net-cfg-tab px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer border border-emerald-600/50 bg-emerald-600/15 text-emerald-300" data-i18n="net_tab_dnsmasq">dnsmasq (IP otomatis kamera)</button>
+              <button onclick="showNetConfig('dnsmasq_commands')" data-cfg="dnsmasq_commands" class="net-cfg-tab px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer border border-slate-700 bg-slate-800 text-slate-300" data-i18n="net_tab_dnsmasq_cmd">pasang dnsmasq</button>
+            </div>
+            <pre id="net-config-text" class="bg-slate-950 border border-slate-800 rounded-lg p-3 text-[10px] md:text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre max-h-96 overflow-y-auto"></pre>
+            <div class="flex flex-wrap gap-2">
+              <button onclick="copyNetConfig()" class="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                <i class="fa-solid fa-copy"></i><span data-i18n="net_copy">Salin</span>
+              </button>
+            </div>
+            <div class="text-[10px] text-slate-400 space-y-1">
+              <div class="font-semibold text-slate-300" data-i18n="net_verify_title">Setelah diterapkan, verifikasi dengan:</div>
+              <pre id="net-verify-cmds" class="font-mono text-slate-400"></pre>
+            </div>
+          </div>
+
+        </section>
+
+        <section id="view-users" class="view-section admin-only hidden space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-2 sm:space-y-0">
+            <div>
+              <h2 class="text-xl md:text-2xl font-bold tracking-tight" data-i18n="users_title">Manajemen Pengguna</h2>
+              <p class="text-slate-400 text-xs md:text-sm" data-i18n="users_sub">Kelola akun administrator dan publik untuk mengontrol akses CCTV.</p>
+            </div>
+            <button onclick="openUserFormModal()" class="flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition shadow-md self-start sm:self-auto cursor-pointer border-0">
+              <i class="fa-solid fa-user-plus"></i>
+              <span data-i18n="add_user">Tambah User</span>
+            </button>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg max-w-4xl">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs md:text-sm text-slate-300 border-collapse">
+                <thead class="bg-slate-950 text-slate-400 text-[10px] md:text-xs uppercase font-semibold border-b border-slate-800">
+                  <tr>
+                    <th class="p-3 md:p-4" data-i18n="username">Username</th>
+                    <th class="p-3 md:p-4" data-i18n="role">Role / Peran</th>
+                    <th class="p-3 md:p-4 hidden sm:table-cell" data-i18n="created_at">Dibuat Pada</th>
+                    <th class="p-3 md:p-4 text-right" data-i18n="action">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="users-table-body" class="divide-y divide-slate-800/60"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= VIEW: SETTINGS ================= -->
+        <section id="view-settings" class="view-section hidden space-y-6 max-w-4xl">
+          <div>
+            <h2 class="text-xl md:text-2xl font-bold tracking-tight" data-i18n="settings_title">Pengaturan Sistem</h2>
+            <p class="text-slate-400 text-xs md:text-sm" data-i18n="settings_sub">Kustomisasi metadata aplikasi dan ganti kata sandi login Anda.</p>
+          </div>
+
+          <div id="settings-app-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-blue-400" data-i18n="app_settings">Pengaturan Tampilan Aplikasi</h3>
+            <form id="settings-app-form" onsubmit="handleSaveAppSettings(event)" class="space-y-4">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="setting_name">Nama Aplikasi</label>
+                  <input type="text" id="setting-app-name" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div>
+                  <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="setting_sub">Subtitle Aplikasi</label>
+                  <input type="text" id="setting-app-sub" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+              </div>
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="setting_running">Teks Berjalan Utama</label>
+                <textarea id="setting-running-text" required rows="2" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"></textarea>
+              </div>
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="setting_footer">Kaki Halaman (Footer)</label>
+                <input type="text" id="setting-site-footer" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              </div>
+              <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="save">Simpan Perubahan</button>
+            </form>
+          </div>
+
+          <!-- v2.9: Jaringan / Network -->
+          <div id="settings-network-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-cyan-400 flex items-center space-x-2">
+              <i class="fa-solid fa-network-wired"></i>
+              <span data-i18n="network_title">Jaringan &amp; Metode Koneksi Kamera</span>
+            </h3>
+            <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed" data-i18n="network_desc">
+              Lihat alamat IP perangkat ini, gateway, dan status internet. Pakai alamat <strong>LAN</strong> bila
+              kamera dan STB berada di jaringan yang sama (paling stabil), atau <strong>URL internet</strong>
+              bila kamera menyediakan HLS/HTTP publik.
+            </p>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5 text-[10px] md:text-xs">
+                <div class="font-semibold text-slate-300 mb-1" data-i18n="network_addr">Alamat IP perangkat ini</div>
+                <div id="network-iface-list" class="space-y-1"></div>
+              </div>
+              <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5 text-[10px] md:text-xs">
+                <div class="font-semibold text-slate-300 mb-1" data-i18n="network_gateway">Gateway &amp; DNS</div>
+                <div class="flex justify-between"><span class="text-slate-500">Hostname</span><span id="network-hostname" class="font-mono text-slate-300">—</span></div>
+                <div class="flex justify-between"><span class="text-slate-500">Gateway</span><span id="network-gateway" class="font-mono text-slate-300">—</span></div>
+                <div class="flex justify-between"><span class="text-slate-500">DNS</span><span id="network-dns" class="font-mono text-slate-300">—</span></div>
+                <div class="flex justify-between items-center pt-1 border-t border-slate-800">
+                  <span class="text-slate-500" data-i18n="network_internet">Internet</span>
+                  <span id="network-internet" class="font-mono">—</span>
+                </div>
+                <button type="button" onclick="handleTestInternet()" class="w-full mt-1 bg-slate-700 hover:bg-slate-600 text-white px-2 py-1.5 rounded text-[10px] font-semibold transition cursor-pointer border-0">
+                  <i class="fa-solid fa-rotate mr-1"></i><span data-i18n="network_test">Uji Koneksi Internet</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="border-t border-slate-800 pt-3">
+              <div class="font-semibold text-slate-300 text-[10px] md:text-xs mb-2" data-i18n="network_method">Metode koneksi kamera — pilih yang paling cocok</div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-[10px] md:text-xs text-slate-300">
+                  <thead class="text-slate-500 text-left">
+                    <tr class="border-b border-slate-800">
+                      <th class="py-1.5 pr-2" data-i18n="network_m_method">Metode</th>
+                      <th class="py-1.5 pr-2" data-i18n="network_m_when">Pakai bila</th>
+                      <th class="py-1.5 pr-2" data-i18n="network_m_stab">Stabilitas</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800/60">
+                    <tr><td class="py-1.5 pr-2 font-medium text-slate-200">RTSP (LAN)</td>
+                        <td class="py-1.5 pr-2">Kamera &amp; STB di jaringan/router/switch yang sama</td>
+                        <td class="py-1.5 pr-2 text-emerald-400" data-i18n="network_best">Paling stabil</td></tr>
+                    <tr><td class="py-1.5 pr-2 font-medium text-slate-200">HLS / HTTP (.m3u8)</td>
+                        <td class="py-1.5 pr-2">Kamera tidak mendukung RTSP, tapi punya URL HLS/HTTP</td>
+                        <td class="py-1.5 pr-2 text-emerald-400" data-i18n="network_stable">Stabil</td></tr>
+                    <tr><td class="py-1.5 pr-2 font-medium text-slate-200">URL Internet langsung</td>
+                        <td class="py-1.5 pr-2">Kamera di luar jaringan (butuh internet stabil)</td>
+                        <td class="py-1.5 pr-2 text-amber-400" data-i18n="network_depends">Tergantung ISP</td></tr>
+                    <tr><td class="py-1.5 pr-2 font-medium text-slate-200">YouTube Live</td>
+                        <td class="py-1.5 pr-2">Kamera sudah streaming ke YouTube</td>
+                        <td class="py-1.5 pr-2 text-amber-400" data-i18n="network_depends">Tergantung ISP</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="text-[9px] text-slate-500 mt-2" data-i18n="network_tip">
+                Tips: untuk kamera yang RTSP-nya tidak didukung, coba URL HLS-nya. Banyak kamera/NVR menyediakan
+                keduanya — HLS biasanya di port 80/8080 dengan akhiran <code>.m3u8</code>.
+              </p>
+            </div>
+          </div>
+
+          <!-- v2.9: Cloudflare Tunnel -->
+          <div id="settings-tunnel-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-sky-400 flex items-center space-x-2">
+              <i class="fa-solid fa-cloud"></i>
+              <span data-i18n="tunnel_title">Akses dari Internet (Cloudflare Tunnel)</span>
+            </h3>
+            <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed" data-i18n="tunnel_desc">
+              Buka akses CCTV dari luar jaringan tanpa IP publik statis dan tanpa membuka port modem
+              (menembus CGNAT ISP). Semua dilakukan dari sini — tidak perlu SSH.
+            </p>
+
+            <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5 text-[10px] md:text-xs">
+              <div class="flex justify-between"><span class="text-slate-500">cloudflared</span><span id="tunnel-st-installed" class="font-mono">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Status</span><span id="tunnel-st-running" class="font-mono">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Mode</span><span id="tunnel-st-mode" class="font-mono text-slate-300">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Berjalan sejak</span><span id="tunnel-st-uptime" class="font-mono text-slate-300">—</span></div>
+            </div>
+
+            <div id="tunnel-not-installed" class="hidden space-y-2">
+              <div class="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-600/30 rounded-lg px-3 py-2">
+                <i class="fa-solid fa-triangle-exclamation mr-1"></i>
+                <span data-i18n="tunnel_need_install">cloudflared belum terpasang (±40 MB, diunduh sekali sesuai arsitektur CPU STB).</span>
+              </div>
+              <button type="button" onclick="handleInstallTunnel()" id="tunnel-install-btn" class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                <i class="fa-solid fa-download mr-1"></i><span data-i18n="tunnel_install">Pasang cloudflared</span>
+              </button>
+            </div>
+
+            <div id="tunnel-controls" class="hidden space-y-3">
+              <div>
+                <span class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-2" data-i18n="tunnel_mode">Mode Tunnel</span>
+                <div class="flex flex-wrap gap-2">
+                  <button type="button" data-tunnel-mode="quick" onclick="handleSetTunnelMode('quick')" class="tunnel-mode-btn px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer border-0">
+                    <i class="fa-solid fa-bolt mr-1"></i><span data-i18n="tunnel_mode_quick">Cepat (tanpa akun)</span>
+                  </button>
+                  <button type="button" data-tunnel-mode="token" onclick="handleSetTunnelMode('token')" class="tunnel-mode-btn px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer border-0">
+                    <i class="fa-solid fa-key mr-1"></i><span data-i18n="tunnel_mode_token">Permanen (token)</span>
+                  </button>
+                </div>
+              </div>
+
+              <div id="tunnel-quick-info" class="text-[10px] text-slate-400 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+                <span data-i18n="tunnel_quick_info">Mendapat URL acak <code>*.trycloudflare.com</code> tanpa akun Cloudflare. Paling mudah, tapi URL berubah setiap tunnel dimulai ulang dan tidak ada jaminan uptime — cocok untuk sementara.</span>
+              </div>
+
+              <div id="tunnel-token-box" class="hidden space-y-1">
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1">Token Connector</label>
+                <input type="password" id="tunnel-token" autocomplete="off" placeholder="eyJhIjoi..." class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500">
+                <span class="text-[9px] text-slate-500 block mt-1" data-i18n="tunnel_token_hint">Ambil dari dashboard Cloudflare → Zero Trust → Networks → Tunnels → buat tunnel → salin token connector. URL permanen (mis. cctv.domainanda.com).</span>
+              </div>
+
+              <div class="flex flex-wrap gap-2">
+                <button type="button" onclick="handleStartTunnel()" id="tunnel-start-btn" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                  <i class="fa-solid fa-play mr-1"></i><span data-i18n="tunnel_start">Nyalakan Tunnel</span>
+                </button>
+                <button type="button" onclick="handleStopTunnel()" class="bg-red-600/80 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                  <i class="fa-solid fa-stop mr-1"></i><span data-i18n="tunnel_stop">Matikan</span>
+                </button>
+                <button type="button" onclick="loadTunnelStatus()" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                  <i class="fa-solid fa-rotate mr-1"></i><span data-i18n="refresh">Muat Ulang</span>
+                </button>
+              </div>
+            </div>
+
+            <div id="tunnel-url-box" class="hidden bg-slate-950 border border-emerald-600/30 rounded-lg p-3 space-y-2">
+              <div class="text-[10px] font-semibold text-emerald-400 uppercase" data-i18n="tunnel_public_url">URL Publik Anda</div>
+              <div class="flex items-center gap-2">
+                <code id="tunnel-url" class="flex-1 min-w-0 text-[11px] font-mono text-slate-200 break-all"></code>
+                <button type="button" onclick="copyPlainText(document.getElementById('tunnel-url').innerText)" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded text-[10px] transition cursor-pointer border-0 flex-shrink-0">
+                  <i class="fa-regular fa-copy"></i>
+                </button>
+              </div>
+            </div>
+
+            <div class="text-[10px] text-amber-300/90 bg-amber-500/10 border border-amber-600/30 rounded-lg px-3 py-2" data-i18n="tunnel_warning">
+              <i class="fa-solid fa-shield-halved mr-1"></i>
+              Tunnel membuka dashboard ini ke internet. Pastikan password admin sudah diganti dari bawaan
+              dan sebaiknya aktifkan 2FA sebelum menyalakannya.
+            </div>
+
+            <details class="text-[10px]">
+              <summary class="cursor-pointer text-slate-500 hover:text-slate-300" data-i18n="tunnel_show_log">Lihat log cloudflared</summary>
+              <pre id="tunnel-log" class="mt-2 bg-slate-950 border border-slate-800 rounded-lg p-2 text-[9px] font-mono text-slate-400 whitespace-pre-wrap max-h-48 overflow-y-auto"></pre>
+            </details>
+          </div>
+
+          <!-- v2.9: Logo, Favicon & Tema -->
+          <div id="settings-branding-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-blue-400 flex items-center space-x-2">
+              <i class="fa-solid fa-image"></i>
+              <span data-i18n="branding_title">Logo, Favicon &amp; Tema</span>
+            </h3>
+            <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed" data-i18n="branding_desc">
+              Unggah logo dan favicon langsung dari sini — tidak perlu lagi menyalin berkas ke STB lewat SSH.
+              Gunakan PNG transparan. Bila dikosongkan, aplikasi otomatis memakai ikon tameng bawaan.
+            </p>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+                <div class="flex items-center gap-2">
+                  <div class="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden flex-shrink-0">
+                    <img id="branding-preview-logo" src="/logo.png" alt="" class="w-full h-full object-contain" onerror="this.style.display='none'">
+                  </div>
+                  <div class="min-w-0">
+                    <div class="text-[11px] font-semibold text-slate-200 truncate" data-i18n="branding_logo">Logo Aplikasi</div>
+                    <div class="text-[9px] text-slate-500">logo.png · disarankan 128×128</div>
+                  </div>
+                </div>
+                <div id="branding-status-logo" class="text-[9px] text-slate-500"></div>
+                <label class="block bg-slate-700 hover:bg-slate-600 text-white px-2 py-1.5 rounded-lg text-[10px] font-semibold transition cursor-pointer text-center border-0">
+                  <i class="fa-solid fa-upload mr-1"></i><span data-i18n="branding_upload">Unggah</span>
+                  <input type="file" accept="image/png,image/jpeg" class="hidden" onchange="handleUploadBranding('logo', this)">
+                </label>
+                <button type="button" onclick="handleResetBranding('logo')" class="w-full bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded-lg text-[10px] transition cursor-pointer border-0" data-i18n="branding_reset">Kembalikan Bawaan</button>
+              </div>
+
+              <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+                <div class="flex items-center gap-2">
+                  <div class="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden flex-shrink-0">
+                    <img id="branding-preview-logo-login" src="/logo-login.png" alt="" class="w-full h-full object-contain" onerror="this.style.display='none'">
+                  </div>
+                  <div class="min-w-0">
+                    <div class="text-[11px] font-semibold text-slate-200 truncate" data-i18n="branding_logo_login">Logo Login</div>
+                    <div class="text-[9px] text-slate-500">logo-login.png · disarankan 256×256</div>
+                  </div>
+                </div>
+                <div id="branding-status-logo-login" class="text-[9px] text-slate-500"></div>
+                <label class="block bg-slate-700 hover:bg-slate-600 text-white px-2 py-1.5 rounded-lg text-[10px] font-semibold transition cursor-pointer text-center border-0">
+                  <i class="fa-solid fa-upload mr-1"></i><span data-i18n="branding_upload">Unggah</span>
+                  <input type="file" accept="image/png,image/jpeg" class="hidden" onchange="handleUploadBranding('logo-login', this)">
+                </label>
+                <button type="button" onclick="handleResetBranding('logo-login')" class="w-full bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded-lg text-[10px] transition cursor-pointer border-0" data-i18n="branding_reset">Kembalikan Bawaan</button>
+              </div>
+
+              <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+                <div class="flex items-center gap-2">
+                  <div class="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden flex-shrink-0">
+                    <img id="branding-preview-favicon" src="/favicon.png" alt="" class="w-full h-full object-contain" onerror="this.style.display='none'">
+                  </div>
+                  <div class="min-w-0">
+                    <div class="text-[11px] font-semibold text-slate-200 truncate" data-i18n="branding_favicon">Favicon</div>
+                    <div class="text-[9px] text-slate-500">favicon.png · maks 256 KB</div>
+                  </div>
+                </div>
+                <div id="branding-status-favicon" class="text-[9px] text-slate-500"></div>
+                <label class="block bg-slate-700 hover:bg-slate-600 text-white px-2 py-1.5 rounded-lg text-[10px] font-semibold transition cursor-pointer text-center border-0">
+                  <i class="fa-solid fa-upload mr-1"></i><span data-i18n="branding_upload">Unggah</span>
+                  <input type="file" accept="image/png,image/jpeg" class="hidden" onchange="handleUploadBranding('favicon', this)">
+                </label>
+                <button type="button" onclick="handleResetBranding('favicon')" class="w-full bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded-lg text-[10px] transition cursor-pointer border-0" data-i18n="branding_reset">Kembalikan Bawaan</button>
+              </div>
+            </div>
+
+            <div class="border-t border-slate-800 pt-4 space-y-3">
+              <div>
+                <span class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-2" data-i18n="theme_mode">Mode Tema</span>
+                <div class="flex flex-wrap gap-2">
+                  <button type="button" data-theme-mode="dark"  onclick="handleSetThemeMode('dark')"  class="theme-mode-btn px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer border-0"><i class="fa-solid fa-moon mr-1"></i>Gelap</button>
+                  <button type="button" data-theme-mode="light" onclick="handleSetThemeMode('light')" class="theme-mode-btn px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer border-0"><i class="fa-solid fa-sun mr-1"></i>Terang</button>
+                  <button type="button" data-theme-mode="auto"  onclick="handleSetThemeMode('auto')"  class="theme-mode-btn px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer border-0"><i class="fa-solid fa-circle-half-stroke mr-1"></i>Ikut Sistem</button>
+                </div>
+              </div>
+
+              <div>
+                <span class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-2" data-i18n="theme_accent">Warna Aksen</span>
+                <div class="flex flex-wrap gap-2">
+                  <button type="button" data-accent="blue"    onclick="handleSetAccent('blue')"    class="accent-btn w-8 h-8 rounded-full border-2 transition cursor-pointer" style="background:#2563eb" title="Biru"></button>
+                  <button type="button" data-accent="emerald" onclick="handleSetAccent('emerald')" class="accent-btn w-8 h-8 rounded-full border-2 transition cursor-pointer" style="background:#059669" title="Hijau"></button>
+                  <button type="button" data-accent="violet"  onclick="handleSetAccent('violet')"  class="accent-btn w-8 h-8 rounded-full border-2 transition cursor-pointer" style="background:#7c3aed" title="Ungu"></button>
+                  <button type="button" data-accent="rose"    onclick="handleSetAccent('rose')"    class="accent-btn w-8 h-8 rounded-full border-2 transition cursor-pointer" style="background:#e11d48" title="Merah"></button>
+                  <button type="button" data-accent="amber"   onclick="handleSetAccent('amber')"   class="accent-btn w-8 h-8 rounded-full border-2 transition cursor-pointer" style="background:#d97706" title="Kuning"></button>
+                  <button type="button" data-accent="cyan"    onclick="handleSetAccent('cyan')"    class="accent-btn w-8 h-8 rounded-full border-2 transition cursor-pointer" style="background:#0891b2" title="Biru Muda"></button>
+                </div>
+                <span class="text-[9px] text-slate-500 block mt-2" data-i18n="theme_accent_hint">Perubahan warna langsung terlihat tanpa memuat ulang halaman.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- v2.8: Alamat Akses (IP Statis & Dinamis) -->
+          <div id="settings-access-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-sky-400 flex items-center space-x-2">
+              <i class="fa-solid fa-network-wired"></i>
+              <span data-i18n="access_title">Alamat Akses Aplikasi</span>
+            </h3>
+            <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed" data-i18n="access_desc">
+              Tentukan bagaimana aplikasi ini diakses: lewat <strong>IP lokal</strong> (jaringan WiFi/LAN yang sama,
+              cepat dan hemat kuota) atau lewat <strong>URL publik</strong> (Cloudflare Tunnel / DDNS, bisa dari mana saja).
+              Aplikasi Android akan membaca pengaturan ini otomatis.
+            </p>
+
+            <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5">
+              <div class="text-[10px] font-semibold text-slate-400 uppercase" data-i18n="access_detected">IP lokal terdeteksi di STB</div>
+              <div id="access-detected-list" class="text-[11px] font-mono text-sky-300 space-y-0.5"></div>
+            </div>
+
+            <form id="settings-access-form" onsubmit="handleSaveAccessSettings(event)" class="space-y-4">
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="access_prefer">Mode Akses Utama</label>
+                <select id="access-prefer" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500">
+                  <option value="auto" data-i18n="access_prefer_auto">Otomatis (pakai IP lokal bila terjangkau)</option>
+                  <option value="local" data-i18n="access_prefer_local">Selalu IP lokal</option>
+                  <option value="public" data-i18n="access_prefer_public">Selalu URL publik</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="access_local">URL Akses Lokal (IP Statis)</label>
+                <div class="flex flex-wrap gap-2">
+                  <input type="text" id="access-local-url" placeholder="http://192.168.1.18:3000" class="flex-1 min-w-[200px] bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm font-mono text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500">
+                  <button type="button" onclick="useDetectedAddress()" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-[10px] md:text-xs font-semibold transition cursor-pointer border-0 whitespace-nowrap" data-i18n="access_use_detected">Pakai IP Terdeteksi</button>
+                </div>
+                <span class="text-[9px] text-slate-500 block mt-1" data-i18n="access_local_hint">Kosongkan untuk memakai IP yang terdeteksi otomatis.</span>
+              </div>
+
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="access_public">URL Akses Publik (Dinamis)</label>
+                <input type="text" id="access-public-url" placeholder="https://cctv.domainanda.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm font-mono text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500">
+                <span class="text-[9px] text-slate-500 block mt-1" data-i18n="access_public_hint">Cloudflare Tunnel, DDNS, atau reverse proxy. Wajib diawali http:// atau https://</span>
+              </div>
+
+              <div class="flex flex-wrap gap-2">
+                <button type="submit" class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="save">Simpan</button>
+                <button type="button" onclick="handleTestAccessUrls()" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="access_test">Uji Kedua Alamat</button>
+              </div>
+            </form>
+
+            <div id="access-test-result" class="hidden space-y-1 text-[10px] md:text-xs"></div>
+          </div>
+
+          <!-- v2.9: Deteksi Objek (AI) -->
+          <div id="settings-ai-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-fuchsia-400 flex items-center space-x-2">
+              <i class="fa-solid fa-robot"></i>
+              <span>Deteksi Objek (AI)</span>
+            </h3>
+            <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed">
+              Mengenali <strong>motor, mobil, manusia, dan hewan</strong> pada gambar snapshot kamera.
+              Deteksi berjalan pada <strong>snapshot</strong>, bukan pada aliran video, agar CPU STB tidak kewalahan.
+              <strong class="text-amber-400">Nonaktif secara bawaan</strong> — inferensi membebani CPU.
+            </p>
+
+            <div id="ai-model-warning" class="hidden text-[10px] md:text-xs text-amber-300 bg-amber-500/10 border border-amber-600/30 rounded-lg px-3 py-2 space-y-2">
+              <div><i class="fa-solid fa-triangle-exclamation mr-1"></i>Model AI belum terunduh (±23 MB). Fitur deteksi tidak akan berjalan sebelum model ada.</div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button type="button" onclick="handleDownloadAiModel()" id="ai-download-btn" class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-[10px] font-semibold transition cursor-pointer border-0">
+                  <i class="fa-solid fa-download mr-1"></i>Unduh Model Sekarang
+                </button>
+                <span class="text-slate-400">atau lewat terminal:</span>
+                <code class="font-mono text-[10px] text-slate-300 bg-slate-950 px-2 py-1 rounded">bash ai/download-model.sh</code>
+              </div>
+              <div id="ai-download-progress" class="hidden text-slate-300"></div>
+            </div>
+
+            <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1 text-[10px] md:text-xs">
+              <div class="flex justify-between"><span class="text-slate-500">Mesin deteksi</span><span id="ai-st-engine" class="font-mono text-slate-300">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Status proses</span><span id="ai-st-ready" class="font-mono">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Inferensi terakhir</span><span id="ai-st-ms" class="font-mono text-slate-300">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Diproses / gagal</span><span id="ai-st-count" class="font-mono text-slate-300">—</span></div>
+              <div class="flex justify-between"><span class="text-slate-500">Total data deteksi</span><span id="ai-st-total" class="font-mono text-slate-300">—</span></div>
+            </div>
+
+            <form id="settings-ai-form" onsubmit="handleSaveAiSettings(event)" class="space-y-4">
+              <label class="flex items-center space-x-3 cursor-pointer">
+                <input type="checkbox" id="ai-enabled" class="w-4 h-4 rounded bg-slate-950 border-slate-700 text-fuchsia-500 focus:ring-fuchsia-500">
+                <span class="text-xs md:text-sm text-slate-200">Aktifkan deteksi otomatis</span>
+              </label>
+
+              <div>
+                <span class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-2">Objek yang dikenali</span>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] md:text-xs text-slate-300">
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="ai-group w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="motor"><span>🏍️ Motor</span></label>
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="ai-group w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="mobil"><span>🚗 Mobil</span></label>
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="ai-group w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="manusia"><span>🚶 Manusia</span></label>
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="ai-group w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="hewan"><span>🐕 Hewan</span></label>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1">Keyakinan Minimum</label>
+                  <input type="number" id="ai-min-conf" min="0.05" max="0.95" step="0.05" value="0.4" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-fuchsia-500">
+                  <span class="text-[9px] text-slate-500 block mt-1">Makin tinggi = makin ketat, makin sedikit salah deteksi</span>
+                </div>
+                <div>
+                  <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1">Jeda Pindai (detik)</label>
+                  <input type="number" id="ai-interval-sec" min="10" max="3600" step="10" value="60" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-fuchsia-500">
+                  <span class="text-[9px] text-slate-500 block mt-1">Minimal 10 detik. Makin cepat = CPU makin panas</span>
+                </div>
+                <div>
+                  <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1">ID Kamera</label>
+                  <input type="text" id="ai-cameras" placeholder="kosong = semua aktif" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-2 focus:ring-fuchsia-500">
+                  <span class="text-[9px] text-slate-500 block mt-1">Contoh: <code>1,3</code></span>
+                </div>
+              </div>
+
+              <label class="flex items-center space-x-3 cursor-pointer">
+                <input type="checkbox" id="ai-notify" class="w-4 h-4 rounded bg-slate-950 border-slate-700 text-fuchsia-500 focus:ring-fuchsia-500">
+                <span class="text-xs md:text-sm text-slate-200">Kirim notifikasi saat objek terdeteksi</span>
+              </label>
+
+              <div class="flex flex-wrap gap-2">
+                <button type="submit" class="bg-fuchsia-600 hover:bg-fuchsia-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0">Simpan</button>
+                <button type="button" onclick="handleAiScanNow()" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0">Pindai Sekarang</button>
+                <button type="button" onclick="loadAiStatus()" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0">Muat Ulang Status</button>
+              </div>
+            </form>
+
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-[10px] md:text-xs font-semibold text-slate-400 uppercase">Deteksi Terbaru</span>
+                <button type="button" onclick="handleClearDetections()" class="text-[10px] text-red-400 hover:text-red-300 bg-red-500/10 px-2 py-1 rounded border-0 cursor-pointer">Hapus Semua</button>
+              </div>
+              <div id="ai-detections-list" class="space-y-1.5 max-h-64 overflow-y-auto"></div>
+            </div>
+          </div>
+
+          <!-- v2.8: Notifikasi Kejadian -->
+          <div id="settings-notify-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-emerald-400 flex items-center space-x-2">
+              <i class="fa-solid fa-bell"></i>
+              <span data-i18n="notify_title">Notifikasi Kejadian</span>
+            </h3>
+            <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed" data-i18n="notify_desc">
+              Kirim peringatan ke Telegram atau webhook Anda saat kamera mati, rekaman gagal, hardisk lepas, disk penuh, atau ada percobaan brute-force. Berjalan tanpa dependensi tambahan agar tetap ringan di STB.
+            </p>
+            <form id="settings-notify-form" onsubmit="handleSaveNotifySettings(event)" class="space-y-4">
+              <label class="flex items-center space-x-3 cursor-pointer">
+                <input type="checkbox" id="notify-enabled" class="w-4 h-4 rounded bg-slate-950 border-slate-700 text-emerald-500 focus:ring-emerald-500">
+                <span class="text-xs md:text-sm text-slate-200" data-i18n="notify_enable">Aktifkan notifikasi keluar</span>
+              </label>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1">Telegram Bot Token</label>
+                  <input type="password" id="notify-telegram-token" autocomplete="off" placeholder="123456789:AA..." class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono">
+                </div>
+                <div>
+                  <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1">Telegram Chat ID</label>
+                  <input type="text" id="notify-telegram-chat" autocomplete="off" placeholder="-1001234567890" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono">
+                </div>
+              </div>
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1">URL Webhook (opsional)</label>
+                <input type="url" id="notify-webhook-url" autocomplete="off" placeholder="https://..." class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono">
+                <span class="text-[9px] text-slate-500 block mt-1" data-i18n="notify_webhook_hint">Menerima POST JSON: {event, title, message, time, camera_name}</span>
+              </div>
+              <div>
+                <span class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-2" data-i18n="notify_events">Kejadian yang dikirim</span>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] md:text-xs text-slate-300">
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="notify-event w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="camera_offline"><span data-i18n="ev_camera_offline">Kamera offline</span></label>
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="notify-event w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="camera_online"><span data-i18n="ev_camera_online">Kamera kembali online</span></label>
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="notify-event w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="record_failed"><span data-i18n="ev_record_failed">Rekaman gagal</span></label>
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="notify-event w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="record_completed"><span data-i18n="ev_record_completed">Rekaman selesai</span></label>
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="notify-event w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="disk_critical"><span data-i18n="ev_disk_critical">Disk hampir penuh</span></label>
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="notify-event w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="hdd_unmount"><span data-i18n="ev_hdd_unmount">Hardisk lepas</span></label>
+                  <label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" class="notify-event w-3.5 h-3.5 rounded bg-slate-950 border-slate-700" value="brute_force"><span data-i18n="ev_brute_force">Percobaan brute-force</span></label>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="save">Simpan</button>
+                <button type="button" onclick="handleTestNotification()" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="notify_test">Kirim Uji</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- v2.8: Two-Factor Authentication -->
+          <div id="settings-2fa-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg logged-in-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-violet-400 flex items-center space-x-2">
+              <i class="fa-solid fa-shield-halved"></i>
+              <span data-i18n="twofa_title">Autentikasi Dua Faktor (2FA)</span>
+            </h3>
+            <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed" data-i18n="twofa_desc">
+              Lapisan keamanan kedua berupa kode 6 digit yang berganti tiap 30 detik. Kompatibel dengan
+              Google Authenticator, Authy, Aegis, FreeOTP, dan 1Password (TOTP / RFC 6238).
+              Sangat disarankan bila STB ini bisa diakses dari internet lewat Cloudflare Tunnel.
+            </p>
+
+            <div id="twofa-state-off" class="space-y-3">
+              <div class="flex items-center space-x-2 text-[10px] text-amber-400 bg-amber-500/10 border border-amber-600/30 rounded-lg px-3 py-2">
+                <i class="fa-solid fa-circle-exclamation"></i>
+                <span data-i18n="twofa_off">2FA sedang NONAKTIF untuk akun ini.</span>
+              </div>
+              <button type="button" onclick="handleSetup2fa()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0">
+                <i class="fa-solid fa-key mr-1"></i><span data-i18n="twofa_start">Mulai Aktivasi 2FA</span>
+              </button>
+            </div>
+
+            <div id="twofa-state-setup" class="hidden space-y-3">
+              <p class="text-[10px] md:text-xs text-slate-300" data-i18n="twofa_step1">
+                <strong>Langkah 1.</strong> Tambahkan akun di aplikasi authenticator Anda memakai kunci rahasia ini:
+              </p>
+              <div class="bg-slate-950 border border-slate-700 rounded-lg p-3 space-y-2">
+                <div class="font-mono text-sm md:text-base text-violet-300 break-all tracking-wider" id="twofa-secret"></div>
+                <button type="button" onclick="copyPlainText(document.getElementById('twofa-secret').innerText)" class="text-[10px] text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded border-0 cursor-pointer">
+                  <i class="fa-regular fa-copy mr-1"></i><span data-i18n="twofa_copy">Salin kunci</span>
+                </button>
+              </div>
+              <div>
+                <label class="block text-[10px] font-semibold text-slate-400 uppercase mb-1">otpauth://</label>
+                <input type="text" readonly id="twofa-otpauth" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-[10px] font-mono text-slate-400 focus:outline-none">
+              </div>
+              <p class="text-[10px] md:text-xs text-slate-300" data-i18n="twofa_step2">
+                <strong>Langkah 2.</strong> Masukkan kode 6 digit yang muncul di aplikasi Anda:
+              </p>
+              <div class="flex flex-wrap items-center gap-2">
+                <input type="text" id="twofa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" class="w-32 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm font-mono tracking-widest text-slate-200 focus:outline-none focus:ring-2 focus:ring-violet-500">
+                <button type="button" onclick="handleEnable2fa()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="twofa_activate">Aktifkan</button>
+                <button type="button" onclick="handleCancel2faSetup()" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="cancel">Batal</button>
+              </div>
+              <p id="twofa-setup-error" class="hidden text-[10px] text-red-400"></p>
+            </div>
+
+            <div id="twofa-state-on" class="hidden space-y-3">
+              <div class="flex items-center space-x-2 text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-600/30 rounded-lg px-3 py-2">
+                <i class="fa-solid fa-circle-check"></i>
+                <span data-i18n="twofa_on">2FA AKTIF. Kode 6 digit diminta setiap kali login.</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <input type="password" id="twofa-disable-password" autocomplete="current-password" placeholder="Password akun" class="w-44 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-red-500">
+                <button type="button" onclick="handleDisable2fa()" class="bg-red-600/80 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="twofa_disable">Nonaktifkan 2FA</button>
+              </div>
+              <p id="twofa-disable-error" class="hidden text-[10px] text-red-400"></p>
+            </div>
+          </div>
+
+          <!-- v2.8: Cadangan & Pulihkan -->
+          <div id="settings-backup-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-cyan-400 flex items-center space-x-2">
+              <i class="fa-solid fa-database"></i>
+              <span data-i18n="backup_title">Cadangkan &amp; Pulihkan Konfigurasi</span>
+            </h3>
+            <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed" data-i18n="backup_desc">
+              Ekspor kamera, pengguna, dan pengaturan ke satu berkas JSON — berguna saat pindah STB atau setelah flash ulang.
+              <strong class="text-amber-400">Berkas ini memuat URL RTSP dan hash password; simpan di tempat aman.</strong>
+            </p>
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" onclick="handleExportBackup()" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0">
+                <i class="fa-solid fa-download mr-1"></i><span data-i18n="backup_export">Unduh Cadangan</span>
+              </button>
+              <label class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0">
+                <i class="fa-solid fa-upload mr-1"></i><span data-i18n="backup_pick">Pilih Berkas</span>
+                <input type="file" id="backup-file" accept="application/json,.json" class="hidden">
+              </label>
+              <button type="button" onclick="handleImportBackup('merge')" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="backup_merge">Pulihkan (Gabung)</button>
+              <button type="button" onclick="handleImportBackup('replace')" class="bg-red-600/80 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="backup_replace">Pulihkan (Ganti)</button>
+            </div>
+          </div>
+
+          <!-- v2.8: Retensi -->
+          <div id="settings-retention-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="text-base md:text-lg font-bold border-b border-slate-800 pb-2 text-amber-400 flex items-center space-x-2">
+              <i class="fa-solid fa-broom"></i>
+              <span data-i18n="retention_title">Kebijakan Retensi Rekaman</span>
+            </h3>
+            <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed" data-i18n="retention_desc">
+              Atur berapa hari rekaman disimpan pada tiap kamera di menu Kelola Kamera. Rekaman yang melewati batas dihapus otomatis setiap jam.
+            </p>
+            <div id="retention-preview" class="text-[10px] md:text-xs text-slate-400 space-y-1"></div>
+            <button type="button" onclick="handleRunRetention()" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="retention_run">Jalankan Pembersihan Sekarang</button>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg">
+            <h3 class="font-bold text-sm md:text-base border-b border-slate-800 pb-2 text-blue-400" data-i18n="account_settings">Pengaturan Akun (Ubah Username & Password)</h3>
+            <form id="settings-pwd-form" onsubmit="handleChangePassword(event)" class="space-y-4 max-w-md">
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="username">Nama Pengguna (Username)</label>
+                <input type="text" id="pwd-username" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              </div>
+              <div class="border-t border-slate-800/60 pt-2">
+                <p class="text-[10px] text-slate-500 mb-2">Isi kolom di bawah ini HANYA jika Anda ingin merubah Kata Sandi:</p>
+              </div>
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="pwd_old">Kata Sandi Lama</label>
+                <input type="password" id="pwd-old" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Masukkan sandi lama jika ingin ganti sandi">
+              </div>
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="pwd_new">Kata Sandi Baru</label>
+                <input type="password" id="pwd-new" minlength="4" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Sandi baru (min 4 karakter)">
+              </div>
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="pwd_new_confirm">Konfirmasi Kata Sandi Baru</label>
+                <input type="password" id="pwd-new-confirm" minlength="4" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Ulangi sandi baru">
+              </div>
+              <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold transition cursor-pointer border-0" data-i18n="save">Simpan Perubahan</button>
+            </form>
+          </div>
+
+          <!-- Recording Date/Time Synchronization Panel -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="font-bold text-sm md:text-base border-b border-slate-800 pb-2 text-cyan-400 flex items-center space-x-2">
+              <i class="fa-solid fa-clock-rotate-left"></i>
+              <span>Sinkronisasi Tanggal & Jam Rekaman</span>
+            </h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-stretch">
+              <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                <span class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Waktu STB Sekarang</span>
+                <div id="time-sync-current" class="font-mono text-base md:text-lg font-bold text-white">--</div>
+                <div class="flex flex-wrap gap-2 text-[10px]">
+                  <span id="time-sync-zone" class="px-2 py-1 rounded bg-blue-500/10 text-blue-400">Asia/Jakarta (WIB)</span>
+                  <span id="time-sync-status" class="px-2 py-1 rounded bg-amber-500/10 text-amber-400">Memeriksa...</span>
+                </div>
+                <p id="time-sync-detail" class="text-[10px] text-slate-500 break-words">Sumber waktu belum diperiksa.</p>
+              </div>
+              <div class="space-y-3 flex flex-col justify-center">
+                <p class="text-[11px] text-slate-400 leading-relaxed">Tekan tombol ini jika tanggal rekaman berhenti, mundur, atau tidak sama dengan waktu nyata. Server akan mencoba <b class="text-slate-300">id.pool.ntp.org</b>, NTP cadangan, lalu HTTP Date fallback. Sinkronisasi juga berjalan otomatis saat boot dan setiap 30 menit.</p>
+                <button id="btn-time-sync" onclick="handleAdminSyncTime()" class="self-start bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition border-0 cursor-pointer flex items-center space-x-1.5 shadow-md">
+                  <i class="fa-solid fa-arrows-rotate"></i>
+                  <span>Sinkronkan Tanggal Sekarang</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cache and RAM Cleaner Panel -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg">
+            <h3 class="font-bold text-sm md:text-base border-b border-slate-800 pb-2 text-blue-400">Pembersihan Cache & RAM Sistem</h3>
+            <div class="space-y-3 max-w-lg">
+              <p class="text-xs text-slate-400 leading-relaxed">Pembersihan ini akan secara paksa mengosongkan berkas buffer HLS yang tidak aktif di disk STB, melakukan sinkronisasi disk (`sync`), dan memicu **`drop_caches`** untuk membebaskan RAM Armbian agar CPU tetap dingin dan performa video berputar super lancar.</p>
+              <button onclick="handleManualClearCache()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition border-0 cursor-pointer flex items-center space-x-1.5 shadow-md">
+                <i class="fa-solid fa-broom animate-pulse"></i>
+                <span>Bersihkan Cache & RAM Sekarang</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Admin Maintenance Panel -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="font-bold text-sm md:text-base border-b border-slate-800 pb-2 text-red-400 flex items-center space-x-2">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              <span>Pemeliharaan STB & Hardisk (Khusus Admin)</span>
+            </h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <!-- Mount HDD Card -->
+              <div class="bg-slate-950 p-4 rounded-xl border border-slate-850 space-y-3">
+                <h4 class="font-bold text-xs text-slate-200 flex items-center space-x-1.5">
+                  <i class="fa-solid fa-hard-drive text-blue-500"></i>
+                  <span>Kaitkan (Mount) Hardisk</span>
+                </h4>
+                <p class="text-[11px] text-slate-400 leading-relaxed">Gunakan fitur ini jika Hardisk 500GB tidak sengaja terlepas atau ingin dikaitkan kembali secara paksa ke dalam sistem tanpa perlu restart STB.</p>
+                <button onclick="handleAdminMountHdd()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition border-0 cursor-pointer flex items-center space-x-1.5 shadow-md">
+                  <i class="fa-solid fa-arrows-spin"></i>
+                  <span>Mount Ulang Hardisk</span>
+                </button>
+              </div>
+
+              <!-- Reboot STB Card -->
+              <div class="bg-slate-950 p-4 rounded-xl border border-slate-850 space-y-3">
+                <h4 class="font-bold text-xs text-slate-200 flex items-center space-x-1.5">
+                  <i class="fa-solid fa-power-off text-red-500"></i>
+                  <span>Mulai Ulang (Reboot) STB</span>
+                </h4>
+                <p class="text-[11px] text-slate-400 leading-relaxed">Gunakan fitur ini untuk melakukan reboot sistem STB Armbian secara aman langsung dari Web UI jika STB terasa mulai lambat atau setelah ganti konfigurasi.</p>
+                <button onclick="handleAdminReboot()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition border-0 cursor-pointer flex items-center space-x-1.5 shadow-md">
+                  <i class="fa-solid fa-rotate animate-spin"></i>
+                  <span>Reboot STB Sekarang</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== v2.9.6 : RESET KE PENGATURAN AWAL ===== -->
+          <div class="bg-slate-900 border-2 border-red-800/60 rounded-xl p-4 md:p-6 space-y-4 shadow-lg admin-only hidden">
+            <h3 class="font-bold text-sm md:text-base border-b border-slate-800 pb-2 text-red-400 flex items-center space-x-2">
+              <i class="fa-solid fa-rotate-left"></i>
+              <span data-i18n="reset_title">Reset ke Pengaturan Awal</span>
+            </h3>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+              <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-3 space-y-1">
+                <div class="font-bold text-red-300 flex items-center gap-1.5">
+                  <i class="fa-solid fa-trash-can"></i><span data-i18n="reset_will_title">Yang DIHAPUS / dikembalikan</span>
+                </div>
+                <ul class="list-disc list-inside space-y-0.5 text-red-200/90">
+                  <li data-i18n="reset_w1">Nama aplikasi, subjudul, teks berjalan, footer</li>
+                  <li data-i18n="reset_w2">Logo, logo halaman login, dan favicon hasil unggahan</li>
+                  <li data-i18n="reset_w3">Tema (mode gelap/terang &amp; warna aksen)</li>
+                  <li data-i18n="reset_w4">Notifikasi Telegram &amp; webhook (token ikut terhapus)</li>
+                  <li data-i18n="reset_w5">Pengaturan deteksi AI (kembali nonaktif)</li>
+                  <li data-i18n="reset_w6">Alamat akses &amp; token Cloudflare Tunnel</li>
+                  <li data-i18n="reset_w7">Rencana Network (peran antarmuka, IP, DHCP server)</li>
+                </ul>
+              </div>
+              <div class="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3 space-y-1">
+                <div class="font-bold text-emerald-300 flex items-center gap-1.5">
+                  <i class="fa-solid fa-shield-halved"></i><span data-i18n="reset_safe_title">Yang AMAN (tidak disentuh)</span>
+                </div>
+                <ul class="list-disc list-inside space-y-0.5 text-emerald-200/90">
+                  <li data-i18n="reset_s1">Daftar kamera beserta URL-nya</li>
+                  <li data-i18n="reset_s2">Semua akun pengguna &amp; password (termasuk 2FA)</li>
+                  <li data-i18n="reset_s3">Seluruh berkas rekaman di hardisk</li>
+                  <li data-i18n="reset_s4">Log aktivitas (jejak audit tetap utuh)</li>
+                  <li data-i18n="reset_s5">Riwayat deteksi AI</li>
+                  <li data-i18n="reset_s6">Sesi login yang sedang berjalan</li>
+                </ul>
+              </div>
+            </div>
+
+            <p class="text-[11px] text-slate-400 leading-relaxed" data-i18n="reset_hint">
+              Tindakan ini tidak bisa dibatalkan dari aplikasi, tetapi nilai lama Anda
+              ditampilkan setelah reset supaya bisa disalin kembali secara manual.
+              Kamera dan rekaman <b>tidak</b> dihapus.
+            </p>
+
+            <button onclick="openResetSettingsModal()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition border-0 cursor-pointer flex items-center space-x-1.5 shadow-md">
+              <i class="fa-solid fa-rotate-left"></i>
+              <span data-i18n="reset_button">Reset Pengaturan ke Bawaan</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Dialog konfirmasi reset: wajib mengetik RESET -->
+        <div id="modal-reset-settings" class="hidden fixed inset-0 z-[100] bg-slate-950/80 backdrop-blur-sm items-center justify-center p-4">
+          <div class="bg-slate-900 border-2 border-red-700/60 rounded-2xl p-5 md:p-6 w-full max-w-md space-y-4 shadow-2xl">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-full bg-red-500/15 border border-red-500/40 flex items-center justify-center flex-shrink-0">
+                <i class="fa-solid fa-triangle-exclamation text-red-400"></i>
+              </div>
+              <div>
+                <h3 class="font-bold text-white text-sm md:text-base" data-i18n="reset_modal_title">Reset ke Pengaturan Awal?</h3>
+                <p class="text-[11px] text-slate-400" data-i18n="reset_modal_sub">Kamera, pengguna, dan rekaman tidak dihapus.</p>
+              </div>
+            </div>
+
+            <p class="text-[11px] text-slate-300" data-i18n="reset_modal_body">
+              Semua pengaturan akan kembali ke nilai bawaan pabrik. Untuk mencegah
+              kepencet, ketik <span class="font-mono font-bold text-red-300">RESET</span>
+              (huruf besar semua) di kotak berikut.
+            </p>
+
+            <input type="text" id="reset-confirm-input" autocomplete="off" spellcheck="false"
+              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2.5 text-sm font-mono text-white text-center tracking-widest focus:outline-none focus:ring-2 focus:ring-red-500"
+              placeholder="RESET" oninput="onResetConfirmInput()">
+
+            <div class="flex gap-2 pt-1">
+              <button onclick="closeResetSettingsModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2.5 rounded-lg text-xs font-semibold transition border-0 cursor-pointer" data-i18n="reset_cancel">
+                Batal
+              </button>
+              <button id="reset-confirm-btn" onclick="doResetSettings()" disabled
+                class="flex-1 bg-red-600 text-white px-4 py-2.5 rounded-lg text-xs font-semibold transition border-0 cursor-not-allowed opacity-40" data-i18n="reset_confirm">
+                Ya, Reset Sekarang
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- v2.8: Log Aktivitas (Audit Trail) -->
+        <section id="view-activity" class="view-section admin-only hidden space-y-6">
+          <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <h2 class="text-lg md:text-xl font-bold text-white flex items-center space-x-2">
+                <i class="fa-solid fa-clipboard-list text-indigo-400"></i>
+                <span data-i18n="activity_title">Log Aktivitas</span>
+              </h2>
+              <p class="text-[10px] md:text-xs text-slate-400 mt-1" data-i18n="activity_desc">Jejak audit: siapa masuk, apa yang diubah, dan kapan. Disimpan lokal di SQLite.</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button onclick="loadActivityLog()" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                <i class="fa-solid fa-rotate mr-1"></i><span data-i18n="refresh">Muat Ulang</span>
+              </button>
+              <button type="button" onclick="handleExportActivity(event)" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-xs font-semibold transition border-0 inline-flex items-center cursor-pointer">
+                <i class="fa-solid fa-file-csv mr-1"></i><span data-i18n="activity_export">Ekspor CSV</span>
+              </button>
+              <button onclick="handleClearActivity()" class="bg-red-600/80 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-xs font-semibold transition cursor-pointer border-0">
+                <i class="fa-solid fa-trash-can mr-1"></i><span data-i18n="activity_clear">Bersihkan</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 md:p-4 shadow-lg">
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
+              <input type="text" id="activity-filter-q" placeholder="Cari detail / IP..." oninput="debounceActivityReload()" class="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              <select id="activity-filter-action" onchange="activityOffset=0;loadActivityLog()" class="bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-slate-200 focus:outline-none"></select>
+              <select id="activity-filter-level" onchange="activityOffset=0;loadActivityLog()" class="bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-slate-200 focus:outline-none">
+                <option value="" data-i18n="activity_all_levels">Semua tingkat</option>
+                <option value="info">info</option>
+                <option value="warn">warn</option>
+                <option value="error">error</option>
+              </select>
+              <input type="date" id="activity-filter-from" onchange="activityOffset=0;loadActivityLog()" class="bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-slate-200 focus:outline-none">
+              <input type="date" id="activity-filter-to" onchange="activityOffset=0;loadActivityLog()" class="bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-slate-200 focus:outline-none">
+            </div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs text-slate-300 border-collapse">
+                <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase font-semibold border-b border-slate-800">
+                  <tr>
+                    <th class="p-3" data-i18n="activity_time">Waktu</th>
+                    <th class="p-3" data-i18n="activity_actor">Pelaku</th>
+                    <th class="p-3 hidden sm:table-cell">IP</th>
+                    <th class="p-3" data-i18n="activity_action">Aksi</th>
+                    <th class="p-3 hidden md:table-cell" data-i18n="activity_detail">Detail</th>
+                  </tr>
+                </thead>
+                <tbody id="activity-table-body" class="divide-y divide-slate-800/60"></tbody>
+              </table>
+            </div>
+            <div id="activity-empty" class="hidden p-8 text-center text-slate-500 text-xs" data-i18n="activity_empty">Belum ada aktivitas tercatat.</div>
+            <div class="p-3 flex items-center justify-between border-t border-slate-800 text-[10px] text-slate-500">
+              <span id="activity-count">0</span>
+              <div class="flex gap-2">
+                <button onclick="activityPrev()" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border-0 cursor-pointer" data-i18n="prev">Sebelumnya</button>
+                <button onclick="activityNext()" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border-0 cursor-pointer" data-i18n="next">Berikutnya</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- App Global Sticky Footer -->
+      <footer class="bg-slate-900 border-t border-slate-800 py-3 px-6 text-center text-[10px] md:text-xs text-slate-500 flex-shrink-0 flex items-center justify-between">
+        <span id="app-footer-text">Web-CCTV HG680P</span>
+        <span class="font-mono" id="app-version-label">v2.8</span>
+      </footer>
+    </main>
+
+    <!-- Mobile Android-style bottom navigation -->
+    <nav id="mobile-bottom-nav" class="mobile-bottom-nav md:hidden" aria-label="Navigasi utama mobile">
+      <button type="button" data-view="dashboard" class="mobile-bottom-item admin-only hidden" aria-label="Dasbor">
+        <span class="mobile-bottom-icon"><i class="fa-solid fa-house"></i></span>
+        <span class="mobile-bottom-label" data-i18n="menu_dashboard">Dasbor</span>
+      </button>
+      <button type="button" data-view="live" class="mobile-bottom-item" aria-label="Live CCTV">
+        <span class="mobile-bottom-icon"><i class="fa-solid fa-video"></i></span>
+        <span class="mobile-bottom-label" data-i18n="menu_live">Live CCTV</span>
+      </button>
+      <button type="button" data-view="map" class="mobile-bottom-item" aria-label="Peta Lokasi">
+        <span class="mobile-bottom-icon"><i class="fa-solid fa-map-location-dot"></i></span>
+        <span class="mobile-bottom-label" data-i18n="menu_map">Peta</span>
+      </button>
+      <button type="button" data-view="records" class="mobile-bottom-item logged-in-only hidden" aria-label="Rekaman">
+        <span class="mobile-bottom-icon"><i class="fa-solid fa-clock-rotate-left"></i></span>
+        <span class="mobile-bottom-label" data-i18n="menu_records">Rekaman</span>
+      </button>
+      <button type="button" id="mobile-bottom-more" class="mobile-bottom-item" aria-label="Menu lainnya" aria-expanded="false" onclick="toggleMobileSidebar()">
+        <span class="mobile-bottom-icon"><i class="fa-solid fa-ellipsis"></i></span>
+        <span class="mobile-bottom-label" data-i18n="menu_more">Lainnya</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- ================= LOGIN FULLPAGE COVER ================= -->
+  <div id="login-container" class="hidden fixed inset-0 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-[999] overflow-y-auto">
+    <div class="bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl flex flex-col space-y-6 relative my-auto">
+      <!-- Close Login Modal Button -->
+      <button type="button" onclick="hideLoginModal()" class="absolute left-6 top-6 text-slate-400 hover:text-white hover:bg-slate-800 w-7 h-7 rounded-lg flex items-center justify-center transition border-0 bg-transparent cursor-pointer" title="Tutup Login">
+        <i class="fa-solid fa-xmark text-sm leading-none"></i>
+      </button>
+
+      <!-- Quick Language Switcher on Login Page -->
+      <div class="absolute right-6 top-6 flex items-center space-x-1 bg-slate-950 p-1 rounded-md text-[10px] border border-slate-800">
+        <button id="login-lang-id-btn" class="px-2 py-0.5 rounded transition font-medium text-blue-400 bg-slate-800" onclick="setLanguage('id')">ID</button>
+        <button id="login-lang-en-btn" class="px-2 py-0.5 rounded transition font-medium text-slate-400 hover:text-slate-200" onclick="setLanguage('en')">EN</button>
+      </div>
+
+      <div class="flex flex-col items-center text-center space-y-2">
+        <div class="mb-1 flex items-center justify-center">
+          <div class="relative flex items-center justify-center">
+            <!-- Pulsing outer ring -->
+            <span class="animate-ping absolute inline-flex h-12 w-12 rounded-full bg-blue-500/20 opacity-75"></span>
+            <div class="bg-gradient-to-tr from-blue-700 to-blue-500 text-white w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl border border-blue-400/30 relative z-10 overflow-hidden">
+              <!-- Custom PNG Logo (Can be replaced simply by uploading logo-login.png to public/ folder) -->
+              <img id="login-logo-img" src="/logo-login.png" class="w-full h-full object-cover hidden" onload="this.classList.remove('hidden'); document.getElementById('login-logo-svg').classList.add('hidden');" onerror="this.classList.add('hidden'); document.getElementById('login-logo-svg').classList.remove('hidden');">
+              
+              <!-- Fallback SVG CCTV Camera with security shield -->
+              <svg id="login-logo-svg" xmlns="http://www.w3.org/2000/svg" class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 111.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                <circle cx="12" cy="11" r="2" fill="white" stroke-width="0"></circle>
+              </svg>
+            </div>
+            <!-- Blinking Red LED Status Indicator -->
+            <span class="absolute top-0 right-0 flex h-3 w-3 z-20">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+            </span>
+          </div>
+        </div>
+        <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">
+          <span id="login-app-name">Web-CCTV</span>
+        </h1>
+        <p id="login-sub-text" class="text-xs md:text-sm text-slate-400" data-i18n="login_desc">Masukkan kredensial Anda untuk mengakses streaming CCTV.</p>
+      </div>
+
+      <form id="login-form" onsubmit="handleLogin(event)" class="space-y-4">
+        <div>
+          <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1.5" data-i18n="username">Nama Pengguna</label>
+          <div class="relative">
+            <i class="fa-solid fa-user absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+            <input type="text" id="login-username" required class="w-full bg-transparent border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition" placeholder="username">
+          </div>
+        </div>
+        <div>
+          <div class="flex justify-between items-center mb-1.5">
+            <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase" data-i18n="password">Kata Sandi</label>
+          </div>
+          <div class="relative">
+            <i class="fa-solid fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+            <input type="password" id="login-password" required class="w-full bg-transparent border border-slate-800 rounded-xl pl-10 pr-12 py-3 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition" placeholder="••••••••">
+            <!-- Toggle password visibility button -->
+            <button type="button" onclick="toggleLoginPasswordVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition focus:outline-none p-1 border-0 bg-transparent cursor-pointer" title="Lihat/Sembunyikan Kata Sandi">
+              <i id="password-toggle-icon" class="fa-solid fa-eye-slash text-sm"></i>
+            </button>
+          </div>
+        </div>
+        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl text-xs md:text-sm font-semibold transition shadow-lg shadow-blue-600/10 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-900" data-i18n="login">
+          Masuk
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: CCTV LIVE STREAM PLAYER ================= -->
+  <div id="modal-player" class="fixed inset-0 bg-slate-950/95 hidden items-center justify-center p-2 md:p-4 z-[200]">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden max-h-[95vh] my-auto">
+      <div class="p-3 md:p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center space-x-3 overflow-hidden">
+          <span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping flex-shrink-0"></span>
+          <div class="overflow-hidden">
+            <h3 id="player-title" class="font-bold text-sm md:text-base leading-tight truncate">Camera Stream</h3>
+            <p id="player-subtitle" class="text-[10px] md:text-xs text-slate-400 truncate">Loading...</p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-1.5 flex-shrink-0">
+          <button onclick="togglePlayerFullscreen()" id="btn-player-fullscreen" class="text-slate-300 hover:text-white hover:bg-blue-600 w-9 h-9 rounded-lg flex items-center justify-center transition bg-blue-600/20 border border-blue-700/40 cursor-pointer" title="Layar Penuh">
+            <i class="fa-solid fa-expand text-base"></i>
+          </button>
+          <button onclick="closePlayerModal()" class="text-slate-400 hover:text-white hover:bg-slate-800 w-8 h-8 rounded-lg flex items-center justify-center transition flex-shrink-0 bg-transparent border-0 cursor-pointer">
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 overflow-y-auto max-h-[calc(95vh-60px)]">
+        <div id="player-video-stage" class="lg:col-span-2 bg-black flex items-center justify-center aspect-video relative">
+          <video id="cctv-video" class="w-full h-full object-contain hidden" playsinline muted autoplay></video>
+          <iframe id="cctv-iframe" class="w-full h-full object-contain hidden" frameborder="0" allowfullscreen></iframe >
+          
+          <!-- Tombol Fullscreen melayang di area video (untuk akses cepat di HP) -->
+          <button onclick="togglePlayerFullscreen()" id="btn-player-fs-overlay" class="absolute top-2 right-2 z-20 bg-slate-950/80 hover:bg-blue-600 text-white w-9 h-9 rounded-lg flex items-center justify-center transition border border-slate-700 cursor-pointer" title="Layar Penuh">
+            <i class="fa-solid fa-expand text-sm"></i>
+          </button>
+          
+          <div id="player-splash" class="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center text-center p-4 space-y-3">
+            <div id="player-splash-icon" class="text-blue-500 text-2xl md:text-3xl animate-spin">
+              <i class="fa-solid fa-spinner"></i>
+            </div>
+            <p id="player-splash-msg" class="text-xs md:text-sm text-slate-300" data-i18n="loading_stream">Memulai streaming, silakan tunggu...</p>
+          </div>
+        </div>
+
+        <div class="p-3 md:p-4 bg-slate-900 border-t lg:border-t-0 lg:border-l border-slate-800 flex flex-col space-y-3">
+          <div class="space-y-2 text-[11px] md:text-xs bg-slate-950 p-3 rounded-lg border border-slate-800">
+            <h4 class="font-semibold text-slate-400 uppercase tracking-wider" data-i18n="stream_stats">Status Aliran Data</h4>
+            <div class="flex justify-between">
+              <span class="text-slate-400" data-i18n="status">Status</span>
+              <span id="player-status-badge" class="font-semibold text-slate-400">Offline</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400" data-i18n="latency">Metode</span>
+              <span id="player-method-val" class="font-semibold text-slate-300">--</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400" data-i18n="uptime">Uptime Stream</span>
+              <span id="player-uptime-val" class="font-semibold text-slate-300">--</span>
+            </div>
+            <div id="player-retry-row" class="flex justify-between hidden">
+              <span class="text-amber-500" data-i18n="reconnection">Percobaan Reconnect</span>
+              <span id="player-retry-val" class="font-semibold text-amber-500">--</span>
+            </div>
+          </div>
+
+          <div id="player-rec-panel" class="admin-only hidden bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2.5">
+            <div class="flex items-center space-x-2 text-slate-400">
+              <i class="fa-solid fa-record-vinyl text-red-500 text-xs"></i>
+              <span class="text-[10px] md:text-xs font-semibold uppercase tracking-wider" data-i18n="manual_recorder">Perekam Manual</span>
+            </div>
+            
+            <div id="rec-not-active" class="space-y-2">
+              <div class="flex items-center space-x-2">
+                <input type="number" id="rec-duration-sec" value="120" min="10" max="1800" class="w-20 bg-slate-900 border border-slate-850 rounded px-2 py-1 text-xs text-white focus:outline-none font-mono">
+                <span class="text-[11px] text-slate-400" data-i18n="seconds">detik</span>
+              </div>
+              <button onclick="handleStartRecordingInPlayer()" class="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-1.5 rounded text-xs transition flex items-center justify-center space-x-1 border-0 cursor-pointer">
+                <i class="fa-solid fa-circle"></i>
+                <span data-i18n="start_record">Mulai Rekam</span>
+              </button>
+            </div>
+            
+            <div id="rec-active" class="hidden space-y-2">
+              <div class="text-[11px] text-slate-400 flex items-center justify-between">
+                <span class="flex items-center space-x-1 text-red-500"><span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping"></span><span data-i18n="recording">Merekam...</span></span>
+                <span id="rec-active-timer" class="font-mono">--:--</span>
+              </div>
+              <button onclick="handleStopRecordingInPlayer()" class="w-full bg-slate-800 hover:bg-slate-700 text-white font-semibold py-1.5 rounded text-xs transition flex items-center justify-center space-x-1 border border-slate-705">
+                <i class="fa-solid fa-square"></i>
+                <span data-i18n="stop_record">Hentikan Rekam</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- PTZ Control Panel -->
+          <div id="player-ptz-panel" class="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2">
+            <div class="flex items-center space-x-2 text-slate-400">
+              <i class="fa-solid fa-gamepad text-blue-500 text-xs"></i>
+              <span class="text-[10px] md:text-xs font-semibold uppercase tracking-wider">Kontrol Gerak (PTZ)</span>
+            </div>
+            
+            <!-- PTZ Joystick Grid -->
+            <div class="flex flex-col items-center justify-center space-y-2">
+              <div class="grid grid-cols-3 gap-2 w-32">
+                <div></div>
+                <button onclick="handlePTZMove('up')" class="bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-lg p-2 text-xs text-white transition flex items-center justify-center cursor-pointer" title="Atas">
+                  <i class="fa-solid fa-chevron-up"></i>
+                </button>
+                <div></div>
+                
+                <button onclick="handlePTZMove('left')" class="bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-lg p-2 text-xs text-white transition flex items-center justify-center cursor-pointer" title="Kiri">
+                  <i class="fa-solid fa-chevron-left"></i>
+                </button>
+                <button onclick="handlePTZMove('stop')" class="bg-red-600 hover:bg-red-700 rounded-lg p-2 text-xs text-white transition flex items-center justify-center cursor-pointer" title="Stop">
+                  <i class="fa-solid fa-circle text-[8px]"></i>
+                </button>
+                <button onclick="handlePTZMove('right')" class="bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-lg p-2 text-xs text-white transition flex items-center justify-center cursor-pointer" title="Kanan">
+                  <i class="fa-solid fa-chevron-right"></i>
+                </button>
+                
+                <div></div>
+                <button onclick="handlePTZMove('down')" class="bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-lg p-2 text-xs text-white transition flex items-center justify-center cursor-pointer" title="Bawah">
+                  <i class="fa-solid fa-chevron-down"></i>
+                </button>
+                <div></div>
+              </div>
+              
+              <!-- Zoom Buttons Row -->
+              <div class="flex space-x-2 w-full pt-1.5 border-t border-slate-900">
+                <button onclick="handlePTZMove('zoom-in')" class="flex-1 bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-lg py-1 px-2 text-[10px] text-slate-200 transition flex items-center justify-center space-x-1 cursor-pointer">
+                  <i class="fa-solid fa-magnifying-glass-plus text-blue-500"></i>
+                  <span>In</span>
+                </button>
+                <button onclick="handlePTZMove('zoom-out')" class="flex-1 bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-lg py-1 px-2 text-[10px] text-slate-200 transition flex items-center justify-center space-x-1 cursor-pointer">
+                  <i class="fa-solid fa-magnifying-glass-minus text-blue-500"></i>
+                  <span>Out</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="player-admin-stream-ctrl" class="admin-only hidden space-y-2">
+            <button onclick="handleForceStopStream()" class="w-full bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded text-xs font-semibold transition flex items-center justify-center space-x-1 border-0 cursor-pointer">
+              <i class="fa-solid fa-stop text-[10px]"></i>
+              <span data-i18n="stop_ffmpeg_stream">Matikan FFmpeg Stream</span>
+            </button>
+            <button onclick="toggleFfLog()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-1.5 rounded text-xs font-semibold transition flex items-center justify-center space-x-1 border border-slate-700 cursor-pointer">
+              <i class="fa-solid fa-file-invoice text-[10px]"></i>
+              <span id="ff-log-btn-text" data-i18n="show_ffmpeg_log">Lihat Log FFmpeg</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="player-log-drawer" class="hidden flex-1 border-t border-slate-800 bg-slate-950 p-4 font-mono text-[10px] md:text-xs text-slate-400 overflow-y-auto max-h-[200px] select-text">
+        <h4 class="font-semibold text-slate-200 mb-2 border-b border-slate-800 pb-1" data-i18n="ffmpeg_log_tail">Buntut Log Transcoder FFmpeg</h4>
+        <pre id="player-log-content" class="whitespace-pre-wrap leading-relaxed">No logs available</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: RECORD PLAYBACK ================= -->
+  <div id="modal-playback" class="fixed inset-0 bg-slate-950/95 hidden items-center justify-center p-2 md:p-4 z-[210]">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl shadow-2xl flex flex-col overflow-hidden my-auto animate-fade-in">
+      <div class="p-3 md:p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center space-x-2 overflow-hidden">
+          <i class="fa-solid fa-play text-blue-500 flex-shrink-0"></i>
+          <div class="overflow-hidden">
+            <h3 id="playback-title" class="font-bold text-sm md:text-base leading-tight truncate">Playback Video</h3>
+            <p id="playback-subtitle" class="text-[10px] md:text-xs text-slate-400 truncate">Loading...</p>
+          </div>
+        </div>
+        <button onclick="closePlaybackModal()" class="text-slate-400 hover:text-white hover:bg-slate-800 w-8 h-8 rounded-lg flex items-center justify-center transition flex-shrink-0 bg-transparent border-0 cursor-pointer">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+      <div class="bg-black aspect-video flex items-center justify-center relative">
+        <video id="playback-video" class="w-full h-full object-contain" controls playsinline></video>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: CAMERA FORM (ADD/EDIT) ================= -->
+  <div id="modal-camera-form" class="fixed inset-0 bg-slate-950/80 hidden items-center justify-center p-2 md:p-4 z-[150]">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[92vh] flex flex-col my-auto">
+      <div class="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between flex-shrink-0">
+        <h3 id="camera-form-title" class="font-bold text-sm md:text-base text-white">Tambah Kamera</h3>
+        <button onclick="closeCameraFormModal()" class="text-slate-400 hover:text-white hover:bg-slate-800 w-8 h-8 rounded-lg flex items-center justify-center transition flex-shrink-0 bg-transparent border-0 cursor-pointer">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+      <form onsubmit="handleSaveCamera(event)" class="p-4 md:p-6 space-y-4 overflow-y-auto flex-1 text-slate-300 text-xs md:text-sm">
+        <input type="hidden" id="cam-id">
+        
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="camera_name_req">Nama Kamera *</label>
+            <input type="text" id="cam-name" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <div>
+            <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="location">Lokasi</label>
+            <input type="text" id="cam-location" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="stream_url_req">RTSP URL / .m3u8 Stream *</label>
+          <input type="text" id="cam-rtsp" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-[10px] md:text-xs" placeholder="rtsp://... atau http://...m3u8">
+          <!-- v2.9.1: pratinjau alamat IP & jalur jaringan, diperbarui saat mengetik -->
+          <div id="cam-url-netinfo" class="mt-2 hidden bg-slate-950/70 border border-slate-800 rounded-lg px-3 py-2 text-[10px] md:text-xs text-slate-400 space-y-1"></div>
+        </div>
+
+        <!-- RTSP URL Maker Helper Panel -->
+        <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-3">
+          <button type="button" onclick="toggleRtspMaker()" class="w-full flex justify-between items-center text-xs font-bold text-blue-400 hover:text-blue-300 focus:outline-none bg-transparent border-0 cursor-pointer">
+            <span class="flex items-center space-x-1.5">
+              <i class="fa-solid fa-wrench text-blue-500"></i>
+              <span>Asisten Pembuat RTSP / ONVIF URL</span>
+            </span>
+            <i id="rtsp-maker-chevron" class="fa-solid fa-chevron-down text-[10px]"></i>
+          </button>
+          
+          <div id="rtsp-maker-content" class="hidden space-y-3 pt-2 border-t border-slate-800/60 text-xs">
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div>
+                <label class="block text-[9px] text-slate-500 uppercase font-semibold mb-1">Merek / Format</label>
+                <select id="maker-brand" onchange="generateRtspPreview()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 focus:outline-none">
+                  <option value="onvif">ONVIF Standar (/onvif1)</option>
+                  <option value="xmdvr">XM / Xiongmai DVR (Deteksi SN Tanpa Pass)</option>
+                  <option value="hikvision">Hikvision (/h264/ch1/main/av_stream)</option>
+                  <option value="dahua">Dahua (/cam/realmonitor?channel=1&subtype=0)</option>
+                  <option value="v380">V380 / XM / IPCam (/live/ch0)</option>
+                  <option value="custom">Format Kustom (.sdp)</option>
+                  <option value="hls">HLS / HTTP Live (.m3u8) — bila RTSP tidak didukung</option>
+                  <option value="mjpeg">MJPEG / Snapshot HTTP (.jpg)</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-[9px] text-slate-500 uppercase font-semibold mb-1">IP Address</label>
+                <input type="text" id="maker-ip" value="192.168.1.3" oninput="generateRtspPreview()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white font-mono focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-[9px] text-slate-500 uppercase font-semibold mb-1">Port RTSP</label>
+                <input type="number" id="maker-port" value="554" oninput="generateRtspPreview()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white font-mono focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-[9px] text-slate-500 uppercase font-semibold mb-1">Path Kustom</label>
+                <input type="text" id="maker-path" value="/h264_ulaw.sdp" oninput="generateRtspPreview()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white font-mono focus:outline-none" placeholder="/live/ch0">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[9px] text-slate-500 uppercase font-semibold mb-1">Nama Pengguna (Username)</label>
+                <input type="text" id="maker-user" value="admin" oninput="generateRtspPreview()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white focus:outline-none">
+              </div>
+              <div>
+                <label class="block text-[9px] text-slate-500 uppercase font-semibold mb-1">Kata Sandi (Password)</label>
+                <input type="text" id="maker-pass" value="admin" oninput="generateRtspPreview()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white focus:outline-none">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[9px] text-slate-500 uppercase font-semibold mb-1">Serial Number (SN) Manual</label>
+                <input type="text" id="maker-sn" oninput="generateRtspPreview()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white font-mono focus:outline-none" placeholder="Masukkan SN / UUID kustom">
+              </div>
+              <div>
+                <label class="block text-[9px] text-slate-500 uppercase font-semibold mb-1">MAC Address Manual</label>
+                <input type="text" id="maker-mac" oninput="generateRtspPreview()" class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white font-mono focus:outline-none" placeholder="00:0B:C1:23:45:67">
+              </div>
+            </div>
+
+            <!-- Live URL Preview -->
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 font-mono text-[10px] text-emerald-400 break-all select-all flex justify-between items-center">
+              <span id="rtsp-maker-preview">rtsp://admin:admin@192.168.1.3:554/onvif1</span>
+              <button type="button" onclick="applyRtspMaker()" class="bg-blue-600 hover:bg-blue-700 text-white text-[9px] font-bold px-2.5 py-1 rounded transition border-0 cursor-pointer ml-2 flex-shrink-0">
+                Gunakan URL
+              </button>
+            </div>
+
+            <!-- ONVIF Scanner Action Button -->
+            <div class="flex flex-wrap items-center justify-between border-t border-slate-800/20 pt-2.5 gap-2 text-xs">
+              <span class="text-slate-400 font-semibold">Bantuan Cari Kamera / DVR otomatis:</span>
+              <div class="flex space-x-2">
+                <button type="button" onclick="handleScanOnvif()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg transition border-0 cursor-pointer flex items-center space-x-1.5 shadow-md">
+                  <i class="fa-solid fa-satellite-dish animate-pulse"></i>
+                  <span>Pindai ONVIF</span>
+                </button>
+                <button type="button" onclick="startQrCodeScanner()" class="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg transition border-0 cursor-pointer flex items-center space-x-1.5 shadow-md">
+                  <i class="fa-solid fa-qrcode"></i>
+                  <span>Scan QR Code</span>
+                </button>
+              </div>
+            </div>
+            
+            <!-- QR Scanner Viewport Container -->
+            <div id="qr-scanner-container" class="hidden bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2 max-w-sm mx-auto">
+              <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider border-b border-slate-900 pb-1 flex justify-between items-center">
+                <span>Arahkan Kamera ke QR Code DVR/NVR</span>
+                <button type="button" onclick="stopQrCodeScanner()" class="text-red-500 hover:text-red-400 bg-transparent border-0 cursor-pointer font-bold flex items-center space-x-1"><i class="fa-solid fa-circle-stop"></i><span>Batal</span></button>
+              </div>
+              <div id="qr-reader" class="w-full aspect-square rounded-xl overflow-hidden border border-slate-800 bg-black"></div>
+              <p id="qr-status" class="text-[9px] text-center text-slate-400">Menyiapkan kamera HP / Webcam...</p>
+            </div>
+            
+            <div id="rtsp-maker-results" class="hidden bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-2 max-h-40 overflow-y-auto">
+              <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider border-b border-slate-900 pb-1 flex justify-between items-center">
+                <span>Hasil Pemindaian ONVIF</span>
+                <span class="text-blue-500 font-mono" id="rtsp-maker-scan-count">0 Ditemukan</span>
+              </div>
+              <div id="rtsp-maker-list" class="space-y-1 divide-y divide-slate-900">
+                <!-- Discovered cameras -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="stream_type">Tipe Stream / DVR</label>
+            <select id="cam-type" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="ipcam">IP Camera (RTSP)</option>
+              <option value="nvr">NVR (RTSP)</option>
+              <option value="dvr">DVR (RTSP)</option>
+              <option value="hls">HLS / HTTP Live (.m3u8)</option>
+              <option value="youtube">YouTube Live Link</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="channel">Channel</label>
+            <input type="number" id="cam-channel" value="1" min="1" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <div>
+            <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="youtube_embed">YouTube Video ID</label>
+            <input type="text" id="cam-yt" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Contoh: dQw4w9WgXcQ">
+          </div>
+        </div>
+
+        <!-- v2.9.9: kualitas gambar & kestabilan stream -->
+        <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-3">
+          <div class="text-[11px] font-bold text-slate-200 flex items-center gap-2">
+            <i class="fa-solid fa-gauge-high text-blue-400"></i>
+            <span data-i18n="cam_quality_title">Kualitas Gambar &amp; Kestabilan Stream</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="cam_profile">Profil Kualitas</label>
+              <select id="cam-profile" onchange="onCamProfileChange()" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="copy">Tanpa transcode — resolusi penuh, paling stabil</option>
+                <option value="full">Transcode resolusi penuh (berat)</option>
+                <option value="720p">Transcode 720p (HD)</option>
+                <option value="540p" selected>Transcode 540p (ringan) — bawaan</option>
+                <option value="480p">Transcode 480p (paling ringan)</option>
+              </select>
+              <p id="cam-profile-hint" class="mt-1 text-[10px] text-slate-500 leading-relaxed"></p>
+            </div>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="cam_fps">Batas FPS <span class="normal-case text-slate-600">(kosong = ikut profil)</span></label>
+                <input type="number" id="cam-fps" min="1" max="60" placeholder="otomatis" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              </div>
+              <label class="flex items-start gap-2 cursor-pointer">
+                <input type="checkbox" id="cam-autorestart" checked class="mt-0.5 rounded bg-slate-950 border-slate-700 text-emerald-600 focus:ring-emerald-500">
+                <span class="text-[11px] text-slate-300 leading-snug">
+                  <span class="font-semibold" data-i18n="cam_autorestart">Sambung ulang otomatis bila stream putus</span>
+                  <span class="block text-[10px] text-slate-500" data-i18n="cam_autorestart_hint">Jeda meningkat 5s → 10s → 20s → 40s → 60s agar STB tidak dibanjiri saat kamera benar-benar mati.</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div class="text-[10px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-2 leading-relaxed">
+            <i class="fa-solid fa-lightbulb mr-1"></i>
+            <span data-i18n="cam_profile_tip">Paling stabil &amp; resolusi penuh: pilih <b>Tanpa transcode</b>, lalu setel kamera Anda mengeluarkan <b>H.264</b> (bukan H.265) di web UI kamera. STB HG680P tidak kuat transcode H.265 1080p secara software.</span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-800/80 pt-4">
+          <div>
+            <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="latitude">Latitude (Peta)</label>
+            <input type="number" id="cam-lat" step="any" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <div>
+            <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="longitude">Longitude (Peta)</label>
+            <input type="number" id="cam-lng" step="any" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+        </div>
+
+        <div class="border-t border-slate-800/80 pt-4 space-y-3">
+          <label class="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" id="cam-rec-enabled" class="rounded bg-slate-950 border-slate-800 text-blue-600 focus:ring-blue-500">
+            <span class="text-[11px] md:text-xs font-semibold text-slate-300" data-i18n="record_enabled">Aktifkan Perekaman Otomatis Terjadwal</span>
+          </label>
+          
+          <div id="cam-rec-settings-div" class="grid grid-cols-1 sm:grid-cols-2 gap-4 hidden bg-slate-950/50 p-3 rounded-lg border border-slate-800/80">
+            <div>
+              <label class="block text-[9px] md:text-[10px] font-semibold text-slate-400 uppercase mb-1">Mode & Waktu Rekam</label>
+              <select id="cam-rec-schedule-preset" class="w-full bg-slate-950 border border-slate-850 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500" onchange="handleRecSchedulePresetChange(this.value)">
+                <option value="24h">Perekaman 24 Jam (Terus-menerus)</option>
+                <option value="*/1">Setiap 1 Menit (Tes)</option>
+                <option value="*/5">Setiap 5 Menit</option>
+                <option value="*/15">Setiap 15 Menit</option>
+                <option value="*/30">Setiap 30 Menit</option>
+                <option value="0">Setiap 1 Jam</option>
+                <option value="custom">Kustom Cron Mini (Lanjut)</option>
+              </select>
+              
+              <input type="hidden" id="cam-rec-schedule" value="24h">
+              
+              <div id="custom-cron-div" class="hidden mt-2 animate-fade-in">
+                <input type="text" id="cam-rec-schedule-custom-val" value="0 * * * *" class="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none font-mono" placeholder="Contoh: 0 0 * * *">
+                <span class="text-[8px] text-slate-500 block mt-1">Format cron mini: menit jam</span>
+              </div>
+            </div>
+            <div>
+              <label class="block text-[9px] md:text-[10px] font-semibold text-slate-400 uppercase mb-1" data-i18n="record_duration">Durasi Per File (Detik)</label>
+              <input type="number" id="cam-rec-duration" value="300" min="10" class="w-full bg-slate-950 border border-slate-850 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500">
+            </div>
+            <div>
+              <label class="block text-[9px] md:text-[10px] font-semibold text-slate-400 uppercase mb-1" data-i18n="retention_days">Simpan Rekaman (Hari)</label>
+              <input type="number" id="cam-retention-days" value="0" min="0" max="3650" class="w-full bg-slate-950 border border-slate-850 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500">
+              <span class="text-[8px] text-slate-500 block mt-1" data-i18n="retention_hint">0 = simpan selamanya. Rekaman lebih tua dari N hari dihapus otomatis tiap jam.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-800/80 pt-4">
+          <label class="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" id="cam-is-public" checked class="rounded bg-slate-950 border-slate-800 text-blue-600 focus:ring-blue-500">
+            <span class="text-[11px] md:text-xs text-slate-300" data-i18n="is_public">Publik (Dilihat Tanpa Login Admin)</span>
+          </label>
+          <label class="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" id="cam-is-active" checked class="rounded bg-slate-950 border-slate-800 text-blue-600 focus:ring-blue-500">
+            <span class="text-[11px] md:text-xs text-slate-300" data-i18n="is_active">Kamera Aktif / Diaktifkan</span>
+          </label>
+        </div>
+
+        <div class="flex items-center justify-end space-x-3 border-t border-slate-800/80 pt-4 flex-shrink-0">
+          <button type="button" onclick="closeCameraFormModal()" class="px-4 py-2 text-slate-400 hover:text-white transition text-xs md:text-sm font-semibold border-0 bg-transparent cursor-pointer" data-i18n="cancel">Batal</button>
+          <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg text-xs md:text-sm font-semibold transition border-0 cursor-pointer" data-i18n="save">Simpan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: USER FORM ================= -->
+  <div id="modal-user-form" class="fixed inset-0 bg-slate-950/80 hidden items-center justify-center p-2 md:p-4 z-[150]">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col my-auto">
+      <div class="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+        <h3 id="user-form-title" class="font-bold text-sm md:text-base text-white">Tambah User</h3>
+        <button onclick="closeUserFormModal()" class="text-slate-400 hover:text-white hover:bg-slate-800 w-8 h-8 rounded-lg flex items-center justify-center transition flex-shrink-0 bg-transparent border-0 cursor-pointer">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+      <form onsubmit="handleSaveUser(event)" class="p-6 space-y-4 text-slate-300 text-xs md:text-sm">
+        <input type="hidden" id="usr-id">
+        <div>
+          <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="username_req">Username *</label>
+          <input type="text" id="usr-username" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label id="usr-password-label" class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="pwd_req">Kata Sandi *</label>
+          <input type="password" id="usr-password" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <span id="usr-pwd-hint" class="text-[9px] text-slate-500 hidden" data-i18n="pwd_hint">Kosongkan jika tidak ingin merubah password.</span>
+        </div>
+        <div>
+          <label class="block text-[10px] md:text-xs font-semibold text-slate-400 uppercase mb-1" data-i18n="role">Role / Peran</label>
+          <select id="usr-role" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="public" data-i18n="role_public">Publik (Hanya Lihat)</option>
+            <option value="admin" data-i18n="role_admin">Admin (Kontrol Penuh)</option>
+          </select>
+        </div>
+        <div class="flex items-center justify-end space-x-3 border-t border-slate-800/80 pt-4">
+          <button type="button" onclick="closeUserFormModal()" class="px-4 py-2 text-slate-400 hover:text-white transition text-xs md:text-sm font-semibold border-0 bg-transparent cursor-pointer" data-i18n="cancel">Batal</button>
+          <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg text-xs md:text-sm font-semibold transition border-0 cursor-pointer" data-i18n="save">Simpan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Loading Overlay -->
+  <div id="global-loader" class="fixed inset-0 bg-slate-950/80 flex flex-col items-center justify-center z-[9999] transition-opacity duration-300">
+    <div class="flex flex-col items-center space-y-3">
+      <div class="text-blue-500 text-4xl md:text-5xl animate-spin">
+        <i class="fa-solid fa-spinner"></i>
+      </div>
+      <p id="loader-msg" class="text-xs md:text-sm font-medium text-slate-300">Memuat Aplikasi...</p>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="fixed bottom-4 right-4 bg-slate-900 border border-slate-800 px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-3 z-[9999] max-w-sm pointer-events-none transform translate-y-20 opacity-0 transition-all duration-300">
+    <div id="toast-icon" class="text-emerald-500">
+      <i class="fa-solid fa-circle-check text-lg"></i>
+    </div>
+    <span id="toast-message" class="text-xs md:text-sm font-semibold text-slate-200">Success message!</span>
+  </div>
+
+  <!-- v2.8: Modal Wajib Ganti Password Bawaan -->
+  <div id="force-password-modal" class="hidden fixed inset-0 z-[100] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-amber-600/40 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center flex-shrink-0">
+          <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
+        </div>
+        <div>
+          <h3 class="text-sm md:text-base font-bold text-white" data-i18n="force_pwd_title">Ganti Password Bawaan</h3>
+          <p class="text-[10px] text-slate-400" data-i18n="force_pwd_sub">Akun ini masih memakai password bawaan pabrik.</p>
+        </div>
+      </div>
+      <p class="text-[10px] md:text-xs text-slate-400 leading-relaxed" data-i18n="force_pwd_body">
+        Password <code class="text-amber-300">admin123</code> / <code class="text-amber-300">publik123</code> sudah diketahui publik dan tercantum di dokumentasi.
+        Jika STB ini bisa diakses dari internet (misalnya lewat Cloudflare Tunnel), kamera Anda dapat diambil alih dalam hitungan menit.
+      </p>
+      <form id="force-password-form" onsubmit="handleForcedPasswordChange(event)" class="space-y-3">
+        <div>
+          <label class="block text-[10px] font-semibold text-slate-400 uppercase mb-1" data-i18n="password">Kata Sandi</label>
+          <input type="password" id="force-old-password" required autocomplete="current-password" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500">
+        </div>
+        <div>
+          <label class="block text-[10px] font-semibold text-slate-400 uppercase mb-1" data-i18n="force_pwd_new">Kata Sandi Baru (min. 8 karakter)</label>
+          <input type="password" id="force-new-password" required minlength="8" autocomplete="new-password" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500">
+        </div>
+        <p id="force-password-error" class="hidden text-[10px] text-red-400"></p>
+        <button type="submit" class="w-full bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-lg text-xs md:text-sm font-bold transition cursor-pointer border-0" data-i18n="force_pwd_submit">Ganti Password Sekarang</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- v2.8: Modal input kode 2FA saat login -->
+  <div id="twofa-modal" class="hidden fixed inset-0 z-[100] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-violet-600/40 rounded-2xl p-6 w-full max-w-sm shadow-2xl space-y-4">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-full bg-violet-500/10 flex items-center justify-center flex-shrink-0">
+          <i class="fa-solid fa-shield-halved text-violet-400"></i>
+        </div>
+        <div>
+          <h3 class="text-sm md:text-base font-bold text-white" data-i18n="twofa_login_title">Verifikasi Dua Faktor</h3>
+          <p class="text-[10px] text-slate-400" id="twofa-login-user"></p>
+        </div>
+      </div>
+      <p class="text-[10px] md:text-xs text-slate-400" data-i18n="twofa_login_body">
+        Masukkan kode 6 digit dari aplikasi authenticator Anda.
+      </p>
+      <form id="twofa-login-form" onsubmit="handleVerify2fa(event)" class="space-y-3">
+        <input type="text" id="twofa-login-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" required class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-3 text-center text-lg font-mono tracking-[0.5em] text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500">
+        <p id="twofa-login-error" class="hidden text-[10px] text-red-400 text-center"></p>
+        <button type="submit" class="w-full bg-violet-600 hover:bg-violet-700 text-white px-4 py-2.5 rounded-lg text-xs md:text-sm font-bold transition cursor-pointer border-0" data-i18n="twofa_verify">Verifikasi &amp; Masuk</button>
+        <button type="button" onclick="handleCancel2faLogin()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-xs transition cursor-pointer border-0" data-i18n="cancel">Batal</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Script Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script>
+    // Toggle Password Visibility on Login Screen
+    function toggleLoginPasswordVisibility() {
+      const pwdInput = document.getElementById("login-password");
+      const toggleIcon = document.getElementById("password-toggle-icon");
+      if (pwdInput && toggleIcon) {
+        if (pwdInput.type === "password") {
+          pwdInput.type = "text";
+          toggleIcon.classList.remove("fa-eye-slash");
+          toggleIcon.classList.add("fa-eye");
+        } else {
+          pwdInput.type = "password";
+          toggleIcon.classList.remove("fa-eye");
+          toggleIcon.classList.add("fa-eye-slash");
+        }
+      }
+    }
+  </script>
+  <script src="/app.js?v=2.8.0"></script>
+</body>
+</html>
