@@ -381,6 +381,18 @@
             </div>
           </div>
 
+          <!-- v2.9.14: atur urutan kamera -->
+          <div class="flex flex-wrap items-center gap-2 admin-only hidden">
+            <button id="btn-reorder-mode" onclick="toggleReorderMode()"
+              class="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-xs font-semibold transition border border-slate-700 cursor-pointer">
+              <i class="fa-solid fa-up-down-left-right"></i>
+              <span data-i18n="reorder_btn">Atur Urutan</span>
+            </button>
+            <span id="reorder-hint" class="hidden text-[10px] md:text-[11px] text-sky-300" data-i18n="reorder_hint">
+              Seret kartu untuk memindahkan, atau pakai tombol ▲▼. Urutan tersimpan otomatis.
+            </span>
+          </div>
+
           <div id="live-cameras-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6"></div>
         </section>
 

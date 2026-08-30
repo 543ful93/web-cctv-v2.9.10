@@ -1,6 +1,6 @@
 {
   "name": "web-cctv-hg680p",
-  "version": "2.9.13",
+  "version": "2.9.14",
   "description": "Web CCTV ringan untuk STB Armbian HG680P - H.265 to H.264 HLS, Recording Scheduler, Retention Policy, Notifikasi Telegram, Audit Log, 2FA TOTP, Deteksi Objek AI, SQLite",
   "main": "server.js",
   "scripts": {
@@ -8,7 +8,7 @@
     "start:mysql": "node server.mysql.js",
     "dev": "nodemon server.js",
     "init-db": "node init-db.js",
-    "test": "node tests/smoke-v28.js && node tests/totp-v28.js && node tests/frontend-v28.js && node tests/netinfo-v29.js && node tests/frontend-netinfo-v29.js && node tests/netplan-v29.js && node tests/frontend-network-v29.js && node tests/frontend-reset-v29.js && node tests/version-consistency.js && node tests/ffmpeg-profiles-v29.js",
+    "test": "node tests/smoke-v28.js && node tests/totp-v28.js && node tests/frontend-v28.js && node tests/netinfo-v29.js && node tests/frontend-netinfo-v29.js && node tests/netplan-v29.js && node tests/frontend-network-v29.js && node tests/frontend-reset-v29.js && node tests/version-consistency.js && node tests/ffmpeg-profiles-v29.js && node tests/reorder-v29.js",
     "test:api": "node tests/smoke-v28.js",
     "test:2fa": "node tests/totp-v28.js",
     "test:ui": "node tests/frontend-v28.js",
@@ -19,6 +19,7 @@
     "test:profiles": "node tests/ffmpeg-profiles-v29.js",
     "test:reset": "node tests/frontend-reset-v29.js",
     "test:version": "node tests/version-consistency.js",
+    "test:reorder": "node tests/reorder-v29.js",
     "test:mysql": "node tests/smoke-mysql.js"
   },
   "dependencies": {

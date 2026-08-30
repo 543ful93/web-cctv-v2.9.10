@@ -412,7 +412,8 @@ ensureColumns('records', [
   { name: 'cloud_error', ddl: 'TEXT' }
 ]);
 ensureColumns('cameras', [
-  { name: 'cloud_upload', ddl: 'INTEGER DEFAULT 0' }   // v2.9.12: unggah rekaman kamera ini?
+  { name: 'cloud_upload', ddl: 'INTEGER DEFAULT 0' },  // v2.9.12: unggah rekaman kamera ini?
+  { name: 'sort_order', ddl: 'INTEGER DEFAULT 0' }     // v2.9.14: urutan tampilan (drag & drop)
 ]);
 ensureColumns('users', [
   { name: 'must_change_password', ddl: 'INTEGER DEFAULT 0' },
@@ -2307,6 +2308,7 @@ app.get('/api/version', (req,res)=>{
       video_profiles: true,
       stream_auto_restart: true,
       cloud_backup: true,
+      camera_reorder: true,
       protected_record_media: !RECORDS_OPEN_STATIC
     }
   });
@@ -2643,10 +2645,10 @@ app.get('/api/cameras', authOptional, (req,res)=>{
   let rows;
   if(isAdmin){
     // Administrator mendapat hak akses penuh untuk melihat seluruh kamera (termasuk yang privat)
-    rows = db.prepare('SELECT * FROM cameras ORDER BY id DESC').all();
+    rows = db.prepare('SELECT * FROM cameras ORDER BY sort_order ASC, id ASC').all();
   } else {
     // Publik / User Baru hanya diizinkan melihat kamera aktif yang ditandai Publik (is_public = 1)
-    rows = db.prepare('SELECT id,name,location,nvr_dvr,channel,is_public,lat,lng,youtube_embed,is_active,codec,rtsp_url FROM cameras WHERE is_public=1 AND is_active=1 ORDER BY id DESC').all();
+    rows = db.prepare('SELECT id,name,location,nvr_dvr,channel,is_public,lat,lng,youtube_embed,is_active,codec,rtsp_url,sort_order FROM cameras WHERE is_public=1 AND is_active=1 ORDER BY sort_order ASC, id ASC').all();
     rows = rows.map(c=>{
       // Sensor kredensial RTSP mentah untuk publik demi keamanan data
       if(!/^https?:\/\//i.test(c.rtsp_url) && !c.youtube_embed){
@@ -2705,6 +2707,59 @@ app.put('/api/cameras/:id', auth('admin'), (req,res)=>{
   try { stopStream(req.params.id); } catch {}
   logActivity('camera.update', `Kamera diperbarui: ${prev.name}`, { req });
   res.json({success:true});
+});
+
+/**
+ * POST /api/cameras/reorder  (admin)
+ * ------------------------------------------------------------------
+ * v2.9.14 — Simpan urutan tampilan kamera (hasil drag & drop di grid).
+ *
+ * Menerima daftar ID dalam urutan BARU, lalu menuliskan sort_order 0,1,2,...
+ * Seluruh daftar dikirim (bukan hanya yang pindah) supaya urutan selalu
+ * konsisten dan tidak bergantung pada nilai lama yang mungkin bolong.
+ *
+ * Keamanan: hanya ID yang benar-benar ada di tabel yang ditulis, jadi
+ * permintaan tidak bisa menyisipkan baris baru atau mengubah kamera lain.
+ */
+app.post('/api/cameras/reorder', auth('admin'), (req, res) => {
+  const raw = Array.isArray(req.body?.order) ? req.body.order : null;
+  if (!raw || !raw.length) return res.status(400).json({ error: 'Kirim "order": [daftar ID kamera berurutan]' });
+
+  // Buang duplikat & yang bukan angka, pertahankan urutan.
+  const seen = new Set();
+  const ids = [];
+  for (const v of raw) {
+    const id = parseInt(v, 10);
+    if (!Number.isFinite(id) || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  if (!ids.length) return res.status(400).json({ error: 'Tidak ada ID kamera yang valid.' });
+
+  // Hanya ID yang benar-benar ada yang boleh ditulis.
+  const marks = ids.map(() => '?').join(',');
+  const existing = db.prepare(`SELECT id FROM cameras WHERE id IN (${marks})`).all(...ids).map(r => r.id);
+  const allowed = ids.filter(id => existing.includes(id));
+  const skipped = ids.filter(id => !existing.includes(id));
+  if (!allowed.length) return res.status(400).json({ error: 'Tidak ada kamera yang cocok dengan ID yang dikirim.' });
+
+  // Kamera yang tidak ikut dikirim ditaruh di belakang, agar tidak "melompat"
+  // ke depan setiap kali pengguna mengatur sebagian saja.
+  const others = db.prepare('SELECT id FROM cameras ORDER BY sort_order ASC, id ASC').all()
+    .map(r => r.id).filter(id => !allowed.includes(id));
+  const finalOrder = allowed.concat(others);
+
+  const upd = db.prepare('UPDATE cameras SET sort_order=? WHERE id=?');
+  const tx = db.transaction(list => { list.forEach((id, i) => upd.run(i, id)); });
+  tx(finalOrder);
+
+  logActivity('camera.reorder', `Urutan kamera diubah: ${allowed.length} kamera disusun ulang`, { req });
+  res.json({
+    success: true,
+    order: finalOrder,
+    skipped,
+    catatan: skipped.length ? `${skipped.length} ID diabaikan karena tidak ditemukan.` : null,
+  });
 });
 
 app.delete('/api/cameras/:id', auth('admin'), (req,res)=>{

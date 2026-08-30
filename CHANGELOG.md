@@ -1,5 +1,60 @@
 # Changelog
 
+## v2.9.14
+
+### ✨ Fitur Baru
+
+**Atur urutan kamera di grid (drag & drop)**
+
+* **Tombol "Atur Urutan"** di halaman Live CCTV (khusus admin). Setelah aktif, kartu bisa
+  **diseret** untuk dipindahkan.
+* **Tombol ▲▼** sebagai alternatif — di layar sentuh, drag sering bentrok dengan scroll,
+  jadi tombol ini pasti jalan di HP.
+* **Lencana nomor urut** (`#1`, `#2`, …) supaya urutan terlihat jelas.
+* **Urutan tersimpan permanen di server** (kolom baru `cameras.sort_order`), jadi berlaku
+  untuk semua pengguna dan tetap ada setelah reload.
+* Urutan berlaku di seluruh aplikasi karena `GET /api/cameras` kini memakai
+  `ORDER BY sort_order ASC, id ASC` (sebelumnya `ORDER BY id DESC`).
+* **Endpoint baru `POST /api/cameras/reorder`** — menerima daftar ID dalam urutan baru.
+
+**Kenapa pakai mode khusus, bukan drag langsung?**
+
+Tanpa pemisahan mode, menyeret kartu bisa tidak sengaja membuka pemutar, dan klik biasa
+bisa tidak sengaja memindahkan kamera. Karena itu drag hanya aktif dalam mode "Atur Urutan";
+di luar mode itu, `onclick` kartu tetap membuka pemutar seperti biasa.
+
+### 🐛 Perbaikan Bug
+
+* **Kartu memakai atribut yang sudah dipakai elemen lain.** Implementasi pertama menaruh
+  `data-cam-id` pada kartu, padahal atribut itu **sudah dipakai oleh `<img>` snapshot di
+  dalam kartu**. Akibatnya `querySelectorAll("[data-cam-id]")` mengambil **kartu dan
+  gambarnya sekaligus**, sehingga urutan terhitung dobel (`[6,6,4,4,5,5]` untuk 3 kamera)
+  dan urutan yang tersimpan salah. Diganti `data-reorder-id` dengan selector
+  `:scope > [data-reorder-id]`. **Ditemukan oleh uji, bukan oleh membaca kode.**
+* **54 kunci terjemahan Inggris hilang** (terkumpul sejak v2.9.6: panel reset, cloud,
+  tempel rclone). Pengguna berbahasa Inggris melihat nama kunci mentah seperti
+  `reset_w1`. Seluruh 54 kunci dilengkapi; diverifikasi tidak ada lagi kunci ID tanpa
+  padanan EN.
+
+### 🔒 Keamanan endpoint reorder
+
+* Hanya ID yang **benar-benar ada di tabel** yang ditulis — permintaan tidak bisa
+  menyisipkan baris baru atau menyentuh kamera lain. ID asing dilaporkan di `skipped`.
+* **Duplikat dibuang**, urutan dipertahankan.
+* Kamera yang tidak ikut dikirim **ditaruh di belakang**, agar tidak "melompat" ke depan
+  setiap kali pengguna mengatur sebagian saja.
+* Permintaan kosong atau seluruhnya ID tidak valid → `400`. Tanpa token → `401`.
+
+### 🧪 Pengujian
+
+* Suite baru `tests/reorder-v29.js` (**26 asersi**, jsdom + server hidup): mode atur urutan,
+  atribut drag, tombol ▲▼, **`onclick` dilepas saat mode aktif** (regresi: jangan sampai
+  menyeret membuka pemutar), `onclick` kembali saat mode mati, jumlah kartu tidak berubah
+  setelah dipindah, dan tidak ada duplikat dalam urutan.
+* Endpoint diuji: urutan tersimpan benar, ID asing dilewati, duplikat dibuang, daftar
+  sebagian menempatkan sisanya di belakang, `400` untuk permintaan kosong, `401` tanpa token.
+* `npm test` kini **810 asersi, 0 gagal**. Perintah baru: `npm run test:reorder`.
+
 ## v2.9.13
 
 Menjawab keluhan *"cara konek ke Drive-nya agar lebih simpel dan tidak bingung"*.

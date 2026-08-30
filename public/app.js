@@ -182,6 +182,10 @@ const i18n = {
     camera_name_req: "Nama Kamera *",
     location: "Lokasi",
     stream_type: "Tipe Stream / DVR",
+    reorder_btn: "Atur Urutan",
+    reorder_hint: "Seret kartu untuk memindahkan, atau pakai tombol ▲▼. Urutan tersimpan otomatis.",
+    reorder_on: "Mode atur urutan aktif. Seret kartu, atau pakai tombol ▲▼.",
+    reorder_saved: "Urutan tersimpan.",
     cloud_title: "Cadangkan Rekaman ke Google Drive",
     cloud_s1: "Pasang rclone di STB",
     cloud_s2: "Hubungkan Google Drive (salin-tempel dari laptop)",
@@ -377,6 +381,62 @@ const i18n = {
     login_desc: "Masukkan kredensial Anda untuk mengakses streaming CCTV."
   },
   en: {
+    reorder_btn: "Reorder",
+    reorder_hint: "Drag a card to move it, or use the ▲▼ buttons. Order is saved automatically.",
+    reorder_on: "Reorder mode on. Drag cards, or use the ▲▼ buttons.",
+    reorder_saved: "Order saved.",
+    reset_title: "Reset to Factory Settings",
+    reset_will_title: "What will be REMOVED / restored",
+    reset_w1: "App name, subtitle, running text, footer",
+    reset_w2: "Uploaded logo, login logo, and favicon",
+    reset_w3: "Theme (dark/light mode & accent colour)",
+    reset_w4: "Telegram & webhook notifications (token is deleted too)",
+    reset_w5: "AI detection settings (back to disabled)",
+    reset_w6: "Access addresses & Cloudflare Tunnel token",
+    reset_w7: "Network plan (interface roles, IPs, DHCP server)",
+    reset_safe_title: "What is SAFE (untouched)",
+    reset_s1: "Camera list and their URLs",
+    reset_s2: "All user accounts & passwords (including 2FA)",
+    reset_s3: "Every recording file on the disk",
+    reset_s4: "Activity log (audit trail stays intact)",
+    reset_s5: "AI detection history",
+    reset_s6: "Active login sessions",
+    reset_hint: "This cannot be undone from the app, but your previous values are shown afterwards so you can copy them back manually. Cameras and recordings are NOT deleted.",
+    reset_button: "Reset Settings to Default",
+    reset_modal_title: "Reset to Factory Settings?",
+    reset_modal_sub: "Cameras, users and recordings are not deleted.",
+    reset_modal_body: "All settings will return to factory defaults. To prevent an accidental click, type RESET (all caps) in the box below.",
+    reset_cancel: "Cancel",
+    reset_confirm: "Yes, Reset Now",
+    cloud_title: "Backup Recordings to Google Drive",
+    cloud_install: "Install Automatically",
+    cloud_step1: "Step 1 — Install rclone",
+    cloud_step2: "Step 2 — Configure the remote over SSH (once)",
+    cloud_ssh_hint: "Google Drive needs a browser login, and the STB has no screen. So you configure it yourself over SSH — this app never stores your cloud token.",
+    cloud_refresh: "Reload Remote List",
+    cloud_remote: "Remote",
+    cloud_folder: "Folder in Cloud",
+    cloud_cleanup: "Delete local recordings when disk reaches (%)",
+    cloud_cleanup_hint: "Recordings already uploaded to the cloud are deleted first.",
+    cloud_enable: "Enable automatic backup",
+    cloud_enable_hint: "Recordings are uploaded one by one after they finish, so the STB is not overloaded.",
+    cloud_delete_after: "Delete local copy right after upload",
+    cloud_delete_after_hint: "Saves the most disk, but leaves no local copy. Leave OFF if your disk is large enough.",
+    cloud_save: "Save",
+    cloud_test: "Test Drive Connection",
+    cloud_retry: "Retry Failed",
+    cloud_percam_hint: "Finally: open Manage Cameras → edit a camera → tick \"Back up this camera's recordings to Cloud\". Only ticked cameras are uploaded.",
+    cloud_s1: "Install rclone on the STB",
+    cloud_s2: "Connect Google Drive (copy-paste from your laptop)",
+    cloud_s3: "Pick a remote & enable",
+    cloud_p1: "On your laptop/PC (which has a browser), install rclone.",
+    cloud_p2: "Run rclone config and follow the prompts.",
+    cloud_p3: "Open the config file and copy its entire contents.",
+    cloud_p4: "Paste it in the box below, then click Save & Connect.",
+    cloud_paste_btn: "Save & Connect",
+    cloud_paste_note: "Your Google Drive token is stored ONLY in rclone.conf on the STB (permission 600) and is never sent back to the browser.",
+    cam_cloud_upload: "Back up this camera's recordings to Cloud",
+    cam_cloud_upload_hint: "Only applies when cloud backup is enabled in Settings. Recordings stay local until the retention limit.",
     // Navigation & Common
     menu_dashboard: "Dashboard",
     menu_live: "Live CCTV",
@@ -2859,6 +2919,140 @@ async function netUseFoundCamera(ip, port) {
   } catch (err) { showToast(err.message, "error"); }
 }
 
+// =====================================================================
+// v2.9.14 — ATUR URUTAN KAMERA (drag & drop)
+// ---------------------------------------------------------------------
+// Urutan disimpan permanen di server (kolom sort_order), jadi berlaku untuk
+// semua pengguna dan tetap ada setelah reload.
+//
+// Dipakai MODE khusus ("Atur Urutan"), bukan drag langsung, karena:
+//   • tanpa itu, menyeret kartu bisa tidak sengaja membuka pemutar
+//   • di layar sentuh, drag sering bentrok dengan scroll
+// Karena itu disediakan juga tombol ▲▼ sebagai alternatif yang pasti jalan
+// di HP.
+// =====================================================================
+let reorderMode = false;
+let draggedCamId = null;
+
+function isReorderMode() {
+  return reorderMode && currentUser && currentUser.role === "admin";
+}
+
+function toggleReorderMode() {
+  if (!currentUser || currentUser.role !== "admin") return;
+  reorderMode = !reorderMode;
+  const btn = document.getElementById("btn-reorder-mode");
+  if (btn) {
+    btn.classList.toggle("bg-sky-600", reorderMode);
+    btn.classList.toggle("text-white", reorderMode);
+    btn.classList.toggle("bg-slate-800", !reorderMode);
+    btn.classList.toggle("text-slate-300", !reorderMode);
+  }
+  const hint = document.getElementById("reorder-hint");
+  if (hint) hint.classList.toggle("hidden", !reorderMode);
+  renderLiveCamerasGrid();
+  if (reorderMode) {
+    showToast(currentLanguage === "id"
+      ? "Mode atur urutan aktif. Seret kartu, atau pakai tombol ▲▼."
+      : "Reorder mode on. Drag cards, or use the ▲▼ buttons.", "info");
+  }
+}
+
+function onCardDragStart(e) {
+  draggedCamId = Number(e.currentTarget.dataset.reorderId);
+  try { e.dataTransfer.setData("text/plain", String(draggedCamId)); } catch {}
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  e.currentTarget.classList.add("opacity-40");
+}
+
+function onCardDragOver(e) {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  e.currentTarget.classList.add("ring-2", "ring-sky-500");
+}
+
+function onCardDragLeave(e) {
+  e.currentTarget.classList.remove("ring-2", "ring-sky-500");
+}
+
+function onCardDragEnd(e) {
+  e.currentTarget.classList.remove("opacity-40");
+  document.querySelectorAll("#live-cameras-grid .ring-2").forEach(el => el.classList.remove("ring-2", "ring-sky-500"));
+  draggedCamId = null;
+}
+
+function onCardDrop(e) {
+  e.preventDefault();
+  const targetEl = e.currentTarget;
+  targetEl.classList.remove("ring-2", "ring-sky-500");
+  const targetId = Number(targetEl.dataset.reorderId);
+  const srcId = draggedCamId !== null ? draggedCamId : Number((e.dataTransfer && e.dataTransfer.getData("text/plain")) || 0);
+  if (!srcId || !targetId || srcId === targetId) return;
+  moveCameraBefore(srcId, targetId);
+}
+
+/** Pindahkan kamera srcId ke posisi targetId dalam daftar saat ini. */
+function moveCameraBefore(srcId, targetId) {
+  const ids = currentGridOrder();
+  const from = ids.indexOf(srcId);
+  const to = ids.indexOf(targetId);
+  if (from === -1 || to === -1 || from === to) return;
+  ids.splice(from, 1);
+  const insertAt = ids.indexOf(targetId) + (from < to ? 1 : 0);
+  ids.splice(insertAt, 0, srcId);
+  applyAndSaveOrder(ids);
+}
+
+/** Geser satu posisi (untuk tombol ▲▼ yang pasti jalan di layar sentuh). */
+function shiftCamera(camId, delta) {
+  const ids = currentGridOrder();
+  const from = ids.indexOf(camId);
+  const to = from + delta;
+  if (from === -1 || to < 0 || to >= ids.length) return;
+  ids.splice(from, 1);
+  ids.splice(to, 0, camId);
+  applyAndSaveOrder(ids);
+}
+
+/** Urutan ID seperti yang sedang tampil di grid. */
+function currentGridOrder() {
+  const gridEl = document.getElementById("live-cameras-grid");
+  if (!gridEl) return [];
+  // Hanya kartu (bukan <img> snapshot di dalamnya) yang dihitung.
+  return Array.from(gridEl.querySelectorAll(":scope > [data-reorder-id]"))
+    .map(el => Number(el.dataset.reorderId))
+    .filter(Number.isFinite);
+}
+
+/** Terapkan urutan ke tampilan lalu simpan ke server. */
+function applyAndSaveOrder(ids) {
+  // Susun ulang camerasList agar urutan bertahan walau grid di-render ulang
+  // (mis. setelah filter berubah atau snapshot disegarkan).
+  const byId = new Map(camerasList.map(c => [Number(c.id), c]));
+  const ordered = [];
+  ids.forEach(id => { const c = byId.get(id); if (c) { ordered.push(c); byId.delete(id); } });
+  byId.forEach(c => ordered.push(c));   // sisanya di belakang
+  camerasList = ordered;
+  renderLiveCamerasGrid();
+  saveCameraOrder(ids);
+}
+
+async function saveCameraOrder(ids) {
+  const L = currentLanguage === "id";
+  try {
+    const res = await fetch("/api/cameras/reorder", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${safeStorage.getItem("token")}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ order: ids }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.success) throw new Error(d.error || `HTTP ${res.status}`);
+    showToast(L ? "Urutan tersimpan." : "Order saved.", "success");
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
 function renderLiveCamerasGrid() {
   cleanupAllHlsInGrid();
 
@@ -2885,10 +3079,29 @@ function renderLiveCamerasGrid() {
     return;
   }
 
-  filtered.forEach(cam => {
+  filtered.forEach((cam, idx) => {
     const card = document.createElement("div");
-    card.className = "bg-slate-900 border border-slate-800 rounded-xl overflow-hidden hover:border-slate-700 transition duration-300 flex flex-col group relative shadow-lg cursor-pointer";
-    card.setAttribute("onclick", `openPlayerModal(${cam.id})`);
+    const reordering = isReorderMode();
+    // PENTING: jangan pakai data-cam-id — atribut itu SUDAH dipakai oleh <img>
+    // snapshot di dalam kartu. Memakainya di kartu juga membuat querySelectorAll
+    // mengambil kartu DAN gambarnya, sehingga urutan jadi dobel.
+    card.dataset.reorderId = String(cam.id);
+    card.className = "bg-slate-900 border border-slate-800 rounded-xl overflow-hidden hover:border-slate-700 transition duration-300 flex flex-col group relative shadow-lg " +
+      (reordering ? "cursor-grab border-dashed border-sky-600/60" : "cursor-pointer");
+
+    // v2.9.14: dalam mode "Atur Urutan" kartu diseret, bukan dibuka.
+    // Ini disengaja — tanpa pemisahan mode, menyeret bisa tidak sengaja membuka
+    // pemutar, dan klik biasa bisa tidak sengaja memindahkan kamera.
+    if (reordering) {
+      card.draggable = true;
+      card.addEventListener("dragstart", onCardDragStart);
+      card.addEventListener("dragover", onCardDragOver);
+      card.addEventListener("dragleave", onCardDragLeave);
+      card.addEventListener("drop", onCardDrop);
+      card.addEventListener("dragend", onCardDragEnd);
+    } else {
+      card.setAttribute("onclick", `openPlayerModal(${cam.id})`);
+    }
 
     const hasYoutube = cam.youtube_embed || cam.nvr_dvr === 'youtube';
     const hasHls = cam.rtsp_url.includes(".m3u8") || cam.nvr_dvr === 'hls';
@@ -2937,6 +3150,14 @@ function renderLiveCamerasGrid() {
             <div class="mt-1 flex flex-wrap items-center gap-1">
               ${netChipHTML(getCamNetInfo(cam))}
             </div>
+            ${isReorderMode() ? `
+            <div class="mt-1.5 flex items-center gap-1.5">
+              <span class="bg-sky-600 text-white rounded px-1.5 py-0.5 text-[9px] font-bold">#${idx + 1}</span>
+              <button onclick="event.stopPropagation(); shiftCamera(${cam.id}, -1)" ${idx === 0 ? "disabled" : ""}
+                class="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 rounded px-2 py-0.5 text-[10px] border-0 cursor-pointer" title="${currentLanguage === 'id' ? 'Naikkan' : 'Move up'}">▲</button>
+              <button onclick="event.stopPropagation(); shiftCamera(${cam.id}, 1)" ${idx === filtered.length - 1 ? "disabled" : ""}
+                class="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 rounded px-2 py-0.5 text-[10px] border-0 cursor-pointer" title="${currentLanguage === 'id' ? 'Turunkan' : 'Move down'}">▼</button>
+            </div>` : ""}
           </div>
           ${streamTypeBadge}
         </div>

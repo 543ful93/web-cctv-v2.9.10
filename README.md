@@ -57,6 +57,32 @@ Untuk yang ingin langsung jalan. Rincian tiap langkah ada di bagian yang ditautk
 > **[`TROUBLESHOOTING-RTSP.md`](TROUBLESHOOTING-RTSP.md)** — mulai dari cek subnet
 > (penyebab paling sering), sampai mencari path RTSP yang benar per merek kamera.
 
+#### Tambahan di v2.9.14
+
+| Fitur | Penjelasan Singkat |
+|---|---|
+| ↕️ **Atur urutan kamera** | Tombol **"Atur Urutan"** di halaman Live CCTV. Setelah aktif, **seret kartu** untuk memindahkan, atau pakai tombol **▲▼** (lebih pasti di HP). Urutan **tersimpan permanen di server**, jadi berlaku untuk semua pengguna dan tetap ada setelah reload. |
+
+**Cara memakai:**
+
+1. Buka **Live CCTV**
+2. Klik tombol **"Atur Urutan"** (hanya terlihat oleh admin)
+3. **Seret kartu** ke posisi yang diinginkan, **atau** klik **▲ / ▼** pada kartu
+4. Selesai — urutan langsung tersimpan. Klik **"Atur Urutan"** lagi untuk keluar dari mode ini
+
+> **Kenapa harus klik "Atur Urutan" dulu?** Kalau drag langsung aktif setiap saat, menyeret
+> kartu bisa tidak sengaja membuka pemutar, dan klik biasa bisa tidak sengaja memindahkan
+> kamera. Di luar mode itu, klik kartu tetap membuka pemutar seperti biasa.
+
+> Urutan ini berlaku di seluruh aplikasi (Live CCTV, Kelola Kamera, Peta), karena daftar
+> kamera diambil dengan `ORDER BY sort_order`.
+
+#### Tambahan di v2.9.13
+
+| Fitur | Penjelasan Singkat |
+|---|---|
+| 📋 **Hubungkan Google Drive cukup salin-tempel** | Tidak perlu SSH lagi. Konfigurasi rclone Anda lakukan di **laptop** (yang punya browser), lalu **tempel** isinya ke dashboard. Token disimpan hanya di `rclone.conf` STB (izin 600) dan tidak pernah dikirim balik ke browser. Lihat [cara lengkapnya](#cara-menghubungkan-google-drive--3-langkah-tanpa-perlu-ssh). |
+
 #### Tambahan di v2.9.12
 
 | Fitur | Penjelasan Singkat |
@@ -64,7 +90,7 @@ Untuk yang ingin langsung jalan. Rincian tiap langkah ada di bagian yang ditautk
 | ☁️ **Pencadangan rekaman ke cloud (rclone)** | Rekaman otomatis diunggah ke Google Drive / cloud lain setelah selesai. **rclone dipasang otomatis**, tetapi kredensial **Anda isi sendiri lewat SSH** (`rclone config`) — aplikasi tidak pernah menyimpan token cloud Anda. Unggahan berjalan **satu per satu** agar tidak membebani STB. Hanya kamera yang dicentang yang diunggah. |
 | 🗑️ **Pembersihan disk terjadwal lebih aman** | Ambang kini **bisa diatur** (bawaan 85%, sebelumnya hardcoded 90%). Rekaman yang **sudah terunggah ke cloud dihapus lebih dulu**, baru rekaman terlama yang belum terunggah. |
 
-**Cara menghubungkan Google Drive — 3 langkah, tanpa perlu SSH:**
+### Cara menghubungkan Google Drive — 3 langkah, tanpa perlu SSH
 
 > **Konsepnya:** Google Drive butuh login lewat browser, sedangkan STB tidak punya layar.
 > Jadi login-nya Anda lakukan di **laptop**, lalu hasilnya **disalin-tempel** ke dashboard.
@@ -334,7 +360,7 @@ Proyek ini kini memiliki suite uji. Server harus sedang berjalan di port 3000:
 cd /root/web-cctv     # sesuaikan dengan lokasi folder proyek Anda
 
 node server.js &      # terminal 1 (backend SQLite, port 3000)
-npm test              # terminal 2 → 784 assertion
+npm test              # terminal 2 → 810 assertion
 ```
 
 | Perintah | Suite | Assertion |
@@ -348,6 +374,7 @@ npm test              # terminal 2 → 784 assertion
 | `npm run test:netui` | Menu Network end-to-end di DOM nyata (jsdom) | 82 |
 | `npm run test:reset` | Tombol reset pengaturan (jsdom + server hidup) | 53 |
 | `npm run test:version` | Konsistensi versi di semua berkas | 21 |
+| `npm run test:reorder` | Atur urutan kamera (jsdom + server hidup) | 26 |
 
 Suite Android dijalankan terpisah (butuh JDK 17 + Android SDK):
 
@@ -360,7 +387,7 @@ cd android-app && ./gradlew testDebugUnitTest     # → 32 uji, 0 gagal
 | `./gradlew testDebugUnitTest` | `UrlNormalizer` — normalisasi alamat APK | 32 |
 | `npm run test:mysql` | Backend MySQL terhadap MariaDB sungguhan | 62 |
 
-`npm test` menjalankan sepuluh suite pertama (784 assertion). `test:mysql` dipisah karena
+`npm test` menjalankan sebelas suite pertama (810 assertion). `test:mysql` dipisah karena
 butuh MariaDB/MySQL yang sedang berjalan:
 
 ```bash
