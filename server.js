@@ -21,6 +21,7 @@ const { createTunnelService, cloudflaredAssetName } = require('./lib/tunnel');
 const { createAiService } = require('./lib/ai');
 const netinfo = require('./lib/netinfo');
 const ffmpegProfiles = require('./lib/ffmpeg-profiles');
+const { createRcloneService } = require('./lib/rclone');
 // dotenv 17 mencetak banner tips ke stdout setiap start; dimatikan agar log
 // systemd/journalctl STB tetap bersih dan mudah di-grep.
 require('dotenv').config({ quiet: true });
@@ -403,6 +404,16 @@ ensureColumns('cameras', [
   { name: 'video_fps', ddl: 'INTEGER' },
   { name: 'auto_restart', ddl: 'INTEGER DEFAULT 1' }
 ]);
+ensureColumns('records', [
+  // v2.9.12: status pencadangan ke cloud (rclone)
+  { name: 'cloud_status', ddl: "TEXT DEFAULT 'pending'" },   // pending|uploading|uploaded|failed|skipped
+  { name: 'cloud_path', ddl: 'TEXT' },
+  { name: 'cloud_uploaded_at', ddl: 'DATETIME' },
+  { name: 'cloud_error', ddl: 'TEXT' }
+]);
+ensureColumns('cameras', [
+  { name: 'cloud_upload', ddl: 'INTEGER DEFAULT 0' }   // v2.9.12: unggah rekaman kamera ini?
+]);
 ensureColumns('users', [
   { name: 'must_change_password', ddl: 'INTEGER DEFAULT 0' },
   { name: 'totp_secret', ddl: 'TEXT' },
@@ -448,7 +459,16 @@ const defaultSettings = {
   ai_keep: '500',
   // v2.9: tema. mode = dark | light | auto ; accent = blue|emerald|violet|rose|amber|cyan
   theme_mode: 'dark',
-  theme_accent: 'blue'
+  theme_accent: 'blue',
+  // v2.9.12: pencadangan rekaman ke cloud (rclone). MATI secara bawaan.
+  cloud_enabled: '0',
+  cloud_remote: '',
+  cloud_folder: 'WebCCTV',
+  // Rekaman tetap disimpan lokal sampai batas retensi; cloud hanya cadangan.
+  // Penghapusan lokal HANYA terjadi bila disk melewati ambang di bawah.
+  cloud_delete_after_upload: '0',
+  // Ambang pemakaian disk yang memicu pembersihan (persen).
+  disk_cleanup_percent: '85'
 };
 const getSetting = db.prepare('SELECT value FROM settings WHERE key=?');
 const setSetting = db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
@@ -746,7 +766,8 @@ app.put('/api/settings', auth('admin'), (req,res)=>{
     'access_local_url','access_public_url','access_prefer',
     'ai_enabled','ai_groups','ai_min_conf','ai_interval_sec','ai_cameras','ai_notify','ai_keep',
     'theme_mode','theme_accent',
-    'tunnel_token'
+    'tunnel_token',
+    'cloud_enabled','cloud_remote','cloud_folder','cloud_delete_after_upload','disk_cleanup_percent'
   ];
   const stmt = db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
   const changed = [];
@@ -1869,6 +1890,403 @@ app.get('/api/cameras/profiles', auth('admin'), (req, res) => {
   });
 });
 
+// Parser error FFmpeg untuk memberikan pesan yang lebih spesifik ke user
+function parseFfmpegError(log) {
+  if (!log) return { type: 'unknown', message: 'Tidak ada log dari FFmpeg.' };
+  const lower = log.toLowerCase();
+  
+  if (lower.includes('401 unauthorized') || lower.includes('authorization failed')) {
+    return { type: 'auth', message: 'Username atau password kamera salah (401 Unauthorized). Silakan periksa kredensial RTSP di menu Kelola Kamera.' };
+  }
+  if (lower.includes('404 not found') || lower.includes('not found')) {
+    return { type: 'notfound', message: 'Path RTSP tidak ditemukan (404). Silakan periksa URL path kamera (contoh: /Streaming/Channels/101 untuk Hikvision, /cam/realmonitor?channel=1&subtype=0 untuk Dahua).' };
+  }
+  if (lower.includes('connection refused') || lower.includes('connection reset')) {
+    return { type: 'offline', message: 'Kamera offline atau port salah. Pastikan kamera menyala dan port RTSP benar (default 554).' };
+  }
+  if (lower.includes('no route to host') || lower.includes('network is unreachable')) {
+    return { type: 'network', message: 'STB tidak bisa menjangkau IP kamera. Pastikan kamera dan STB dalam satu jaringan LAN/WiFi.' };
+  }
+  if (lower.includes('invalid data') || lower.includes('unknown format')) {
+    return { type: 'format', message: 'Format stream kamera tidak dikenal. Coba ubah codec di menu Kelola Kamera ke H.264 atau H.265.' };
+  }
+  if (lower.includes('spawn error') || lower.includes('enoent')) {
+    return { type: 'spawn', message: 'FFmpeg tidak ditemukan di STB. Jalankan: sudo apt install ffmpeg' };
+  }
+  if (lower.includes('cannot assign requested address')) {
+    return { type: 'bind', message: 'Masalah binding jaringan. Coba restart STB atau periksa konfigurasi jaringan.' };
+  }
+  
+  return { type: 'unknown', message: 'FFmpeg gagal memproses stream. Periksa log detail di bawah.' };
+}
+
+// =====================================================================
+// v2.9.12 — PENCADANGAN REKAMAN KE CLOUD (rclone)
+// ---------------------------------------------------------------------
+// Kredensial TIDAK dikelola aplikasi. Pengguna menjalankan `rclone config`
+// sendiri lewat SSH (sekali), aplikasi hanya membaca remote yang sudah ada.
+//
+// Rekaman tetap disimpan lokal sampai batas retensi (cloud hanya cadangan).
+// Penghapusan lokal hanya terjadi bila disk melewati ambang, dan yang dihapus
+// lebih dulu adalah yang SUDAH terunggah.
+//
+// Unggahan berjalan SERIAL dalam satu antrean: STB hanya punya sedikit
+// CPU/RAM, dan mengunggah paralel akan membuat rekaman live tersendat.
+// =====================================================================
+const rcloneSvc = createRcloneService({ logActivity: (a, d) => logActivity(a, d, {}) });
+
+const cloudQueue = [];          // daftar record id menunggu unggah
+let cloudUploading = false;
+const cloudState = { lastRunAt: null, lastError: null, uploadedTotal: 0, failedTotal: 0 };
+
+function cloudConfig() {
+  return {
+    enabled: settingValue('cloud_enabled', '0') === '1',
+    remote: String(settingValue('cloud_remote', '')).trim(),
+    folder: String(settingValue('cloud_folder', 'WebCCTV')).trim() || 'WebCCTV',
+    deleteAfterUpload: settingValue('cloud_delete_after_upload', '0') === '1',
+    cleanupPercent: Math.min(99, Math.max(50, parseInt(settingValue('disk_cleanup_percent', '85'), 10) || 85)),
+  };
+}
+
+/** Masukkan rekaman ke antrean unggah (dipanggil setelah rekaman selesai). */
+function enqueueCloudUpload(recordId) {
+  const cfg = cloudConfig();
+  if (!cfg.enabled || !cfg.remote) return false;
+  const rec = db.prepare('SELECT r.*, c.name AS camera_name, c.cloud_upload FROM records r LEFT JOIN cameras c ON c.id=r.camera_id WHERE r.id=?').get(recordId);
+  if (!rec) return false;
+  // Per kamera: hanya unggah bila kamera ini dicentang.
+  if (Number(rec.cloud_upload) !== 1) {
+    try { db.prepare("UPDATE records SET cloud_status='skipped' WHERE id=?").run(recordId); } catch {}
+    return false;
+  }
+  if (rec.status !== 'completed') return false;
+  if (cloudQueue.includes(recordId)) return false;
+  cloudQueue.push(recordId);
+  processCloudQueue();
+  return true;
+}
+
+/** Jalankan antrean satu per satu. */
+async function processCloudQueue() {
+  if (cloudUploading) return;
+  cloudUploading = true;
+  try {
+    while (cloudQueue.length) {
+      const cfg = cloudConfig();
+      if (!cfg.enabled || !cfg.remote) { cloudQueue.length = 0; break; }
+      const id = cloudQueue.shift();
+      const rec = db.prepare('SELECT r.*, c.name AS camera_name FROM records r LEFT JOIN cameras c ON c.id=r.camera_id WHERE r.id=?').get(id);
+      if (!rec) continue;
+
+      const abs = physicalRecordPath(rec.file_path);
+      if (!abs || !fs.existsSync(abs)) {
+        try { db.prepare("UPDATE records SET cloud_status='failed', cloud_error=? WHERE id=?").run('berkas lokal tidak ada', id); } catch {}
+        cloudState.failedTotal++;
+        continue;
+      }
+
+      const dateStr = String(rec.start_time || '').split(' ')[0] || 'tanpa-tanggal';
+      const remotePath = rcloneSvc.buildRemotePath({
+        remote: cfg.remote, folder: cfg.folder,
+        cameraName: rec.camera_name || `kamera-${rec.camera_id}`,
+        fileName: path.basename(abs), dateStr,
+      });
+
+      try { db.prepare("UPDATE records SET cloud_status='uploading' WHERE id=?").run(id); } catch {}
+      const result = await rcloneSvc.upload({ localPath: abs, remotePath, timeoutMs: 900000 });
+      cloudState.lastRunAt = localNowSql();
+
+      if (result.ok) {
+        try {
+          db.prepare("UPDATE records SET cloud_status='uploaded', cloud_path=?, cloud_uploaded_at=?, cloud_error=NULL WHERE id=?")
+            .run(remotePath, localNowSql(), id);
+        } catch {}
+        cloudState.uploadedTotal++;
+        logActivity('cloud.uploaded',
+          `Rekaman "${rec.camera_name || rec.camera_id}" diunggah ke ${remotePath} (${result.sizeBytes} byte, ${Math.round(result.ms / 1000)} detik)`,
+          { actor: 'system', actorRole: 'system' });
+
+        // Opsional: hapus lokal segera setelah unggah (default MATI).
+        if (cfg.deleteAfterUpload) {
+          try { fs.unlinkSync(abs); } catch {}
+          try { fs.unlinkSync(recordThumbFile(id)); } catch {}
+          logActivity('cloud.local_deleted', `Rekaman lokal dihapus setelah terunggah: ${path.basename(abs)}`,
+            { actor: 'system', actorRole: 'system' });
+        }
+      } else {
+        cloudState.lastError = result.error;
+        cloudState.failedTotal++;
+        try { db.prepare("UPDATE records SET cloud_status='failed', cloud_error=? WHERE id=?").run(String(result.error).slice(0, 300), id); } catch {}
+        logActivity('cloud.failed', `Gagal mengunggah rekaman "${rec.camera_name || rec.camera_id}": ${result.error}`,
+          { actor: 'system', actorRole: 'system', level: 'warn' });
+      }
+    }
+  } catch (err) {
+    cloudState.lastError = err.message;
+    console.warn('⚠️ processCloudQueue():', err.message);
+  } finally {
+    cloudUploading = false;
+  }
+}
+
+app.get('/api/cloud/status', auth('admin'), async (req, res) => {
+  const cfg = cloudConfig();
+  const installed = await rcloneSvc.isInstalled();
+  const remotes = installed ? await rcloneSvc.listRemotes() : [];
+  const counts = (() => {
+    try {
+      const rows = db.prepare("SELECT cloud_status, COUNT(*) c FROM records GROUP BY cloud_status").all();
+      const o = {}; rows.forEach(r => { o[r.cloud_status || 'pending'] = r.c; }); return o;
+    } catch { return {}; }
+  })();
+  res.json({
+    config: cfg,
+    rclone: {
+      installed,
+      version: installed ? await rcloneSvc.version() : null,
+      config_path: rcloneSvc.configPath(),
+      has_config: rcloneSvc.hasConfig(),
+      remotes,
+    },
+    queue: { pending: cloudQueue.length, uploading: cloudUploading },
+    counts,
+    state: cloudState,
+    // Petunjuk singkat bila belum siap — supaya pengguna tahu langkah berikutnya.
+    siap: Boolean(cfg.enabled && cfg.remote && installed && rcloneSvc.hasConfig()),
+    waktu: localNowSql(),
+  });
+});
+
+app.post('/api/cloud/install', auth('admin'), async (req, res) => {
+  const r = await rcloneSvc.install();
+  logActivity('cloud.install', r.ok ? `rclone terpasang (${r.method || 'sudah ada'})` : `Gagal memasang rclone: ${r.error}`, { req });
+  res.json(r);
+});
+
+app.post('/api/cloud/config', auth('admin'), (req, res) => {
+  const b = req.body || {};
+  const allowed = ['cloud_enabled', 'cloud_remote', 'cloud_folder', 'cloud_delete_after_upload', 'disk_cleanup_percent'];
+  const changed = [];
+  allowed.forEach(k => {
+    if (b[k] !== undefined) { setSetting.run(k, String(b[k]).slice(0, 200)); changed.push(k); }
+  });
+  const cfg = cloudConfig();
+  logActivity('cloud.config', `Konfigurasi cloud diperbarui: ${changed.join(', ')} (remote=${cfg.remote || '-'})`, { req });
+  res.json({ success: true, config: cfg });
+});
+
+/**
+ * POST /api/cloud/paste-config  (admin)
+ * ------------------------------------------------------------------
+ * Jalur PALING SEDERHANA untuk menghubungkan Google Drive.
+ *
+ * Pengguna mengonfigurasi rclone di LAPTOP (yang punya browser), menyalin isi
+ * rclone.conf, lalu menempelnya di sini. Tidak perlu SSH, tidak perlu paham
+ * `rclone config` di STB yang tidak punya layar.
+ *
+ * Keamanan: isi berkas TIDAK PERNAH dikembalikan di respons; berkas ditulis
+ * dengan mode 600; token disensor di log aktivitas.
+ */
+app.post('/api/cloud/paste-config', auth('admin'), (req, res) => {
+  const pasted = String((req.body || {}).config || '');
+  const result = rcloneSvc.writeRemoteBlocks(pasted);
+  if (!result.ok) return res.status(400).json(result);
+
+  // Pastikan rclone benar-benar bisa membaca remote yang baru ditulis —
+  // tanpa ini pengguna bisa mengira berhasil padahal berkasnya rusak.
+  rcloneSvc.listRemotes().then(async (remotes) => {
+    logActivity('cloud.paste_config',
+      `Konfigurasi rclone ditempel: ${result.added.length ? 'baru ' + result.added.join(', ') : ''}` +
+      `${result.added.length && result.replaced.length ? '; ' : ''}${result.replaced.length ? 'diperbarui ' + result.replaced.join(', ') : ''}` +
+      ` (remote terbaca: ${remotes.map(r => r.name).join(', ') || 'tidak ada'})`, { req });
+    res.json({
+      ok: true,
+      added: result.added,
+      replaced: result.replaced,
+      remotes,
+      config_path: result.config_path,
+      permissions: result.permissions,
+      catatan: 'Token cloud disimpan hanya di berkas rclone.conf STB (mode 600) dan tidak pernah dikirim balik ke browser.',
+    });
+  }).catch(err => res.status(500).json({ ok: false, error: err.message }));
+});
+
+/** Uji remote benar-benar bisa dipakai (bukan sekadar terdaftar). */
+app.post('/api/cloud/test', auth('admin'), async (req, res) => {
+  const cfg = cloudConfig();
+  if (!cfg.remote) return res.status(400).json({ ok: false, error: 'Belum ada remote dipilih.' });
+  const installed = await rcloneSvc.isInstalled();
+  if (!installed) return res.status(400).json({ ok: false, error: 'rclone belum terpasang.' });
+  const r = await rcloneSvc.testRemote(cfg.remote, cfg.folder);
+  res.json(r);
+});
+
+/** Unggah manual / ulangi yang gagal. */
+app.post('/api/cloud/upload', auth('admin'), (req, res) => {
+  const id = parseInt(req.body?.record_id, 10);
+  const retryFailed = req.body?.retry_failed === true;
+  if (retryFailed) {
+    const rows = db.prepare("SELECT id FROM records WHERE cloud_status='failed' LIMIT 200").all();
+    rows.forEach(r => { if (!cloudQueue.includes(r.id)) cloudQueue.push(r.id); });
+    processCloudQueue();
+    logActivity('cloud.retry', `${rows.length} rekaman gagal dimasukkan ulang ke antrean`, { req });
+    return res.json({ success: true, queued: rows.length });
+  }
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'record_id wajib diisi (atau kirim retry_failed:true)' });
+  const ok = enqueueCloudUpload(id);
+  res.json({ success: ok, queued: ok ? cloudQueue.length : 0,
+    catatan: ok ? null : 'Rekaman tidak diantrekan: cloud nonaktif, kamera tidak dicentang, atau rekaman belum selesai.' });
+});
+
+/**
+ * Sensor kredensial di URL sebelum ditampilkan ke klien atau ditulis ke log.
+ * rtsp://admin:pass@host  ->  rtsp://admin:****@host
+ */
+function maskUrlSecrets(u) {
+  return String(u || '').replace(/:\/\/([^:/@\s]+):([^@\s]+)@/, '://$1:****@');
+}
+
+/**
+ * GET /api/cameras/:id/diagnose  (admin)
+ * ------------------------------------------------------------------
+ * v2.9.11 — Menjawab "kenapa RTSP saya Offline / Connection fail?" dengan
+ * memeriksa SETIAP titik kegagalan secara berurutan, bukan menebak.
+ *
+ * Pesan "Offline / Connection fail" dipakai untuk banyak penyebab berbeda
+ * (salah password, path salah, port ditutup, beda subnet, ffmpeg belum ada).
+ * Tanpa pemeriksaan bertahap pengguna hanya bisa coba-coba. Endpoint ini
+ * melaporkan langkah mana yang gagal beserta cara memperbaikinya.
+ */
+app.get('/api/cameras/:id/diagnose', auth('admin'), async (req, res) => {
+  const cam = db.prepare('SELECT * FROM cameras WHERE id=?').get(req.params.id);
+  if (!cam) return res.status(404).json({ error: 'Kamera tidak ditemukan' });
+
+  const checks = [];
+  const add = (label, ok, detail, fix) => {
+    checks.push({ label, ok: Boolean(ok), detail: String(detail || ''), fix: ok ? null : (fix || null) });
+    return Boolean(ok);
+  };
+
+  const url = cleanStreamUrl(cam.rtsp_url || '');
+
+  // 1. URL terisi & bisa diurai
+  if (!add('URL terisi', url.trim().length > 0, maskUrlSecrets(url) || '(kosong)',
+      'Isi URL RTSP di Kelola Kamera. Pakai "Asisten Pembuat RTSP" bila ragu formatnya.')) {
+    return res.json({ ok: false, camera: cam.name, checks, kesimpulan: 'URL belum diisi.' });
+  }
+
+  const info = netinfo.cameraNetInfo
+    ? await netinfo.cameraNetInfo(cam, { ifaces: netinfo.serverIpv4List() })
+    : null;
+  const parsed = info && info.ok ? info : null;
+  if (!add('URL bisa diurai', Boolean(parsed), parsed ? `${parsed.scheme}://${parsed.host}:${parsed.port}` : (info ? info.error : 'gagal'),
+      'Format harus rtsp://[user:pass@]IP:554/path. Periksa ada/tidaknya "rtsp://" di depan.')) {
+    return res.json({ ok: false, camera: cam.name, checks, kesimpulan: 'URL tidak bisa diurai.' });
+  }
+
+  // 2. Hostname bisa di-resolve
+  const isIp = netinfo.isIpv4(parsed.host) || require('net').isIP(parsed.host) !== 0;
+  if (!isIp) {
+    const resolved = await netinfo.resolveIpv4(parsed.host);
+    add('Nama host bisa di-resolve (DNS)', Boolean(resolved),
+      resolved || `${parsed.host} tidak bisa di-resolve`,
+      'Pakai IP kamera langsung, atau perbaiki DNS STB. Nama .local butuh avahi-daemon.');
+  } else {
+    add('Nama host bisa di-resolve (DNS)', true, `${parsed.host} (sudah berupa IP)`, null);
+  }
+
+  const target = parsed.ip || parsed.host;
+
+  // 3. Rute dari STB ke IP kamera
+  const route = await netinfo.routeVia(target);
+  add('STB punya rute ke IP kamera', Boolean(route && route.dev),
+    route ? `lewat ${route.dev}${route.via ? ' via ' + route.via : ''}` : 'tidak ada rute',
+    'Kamera dan STB harus satu jaringan. Beri antarmuka LAN STB IP di subnet kamera (menu Network).');
+
+  // 4. Apakah satu subnet (penting untuk LAN langsung)
+  const own = netinfo.serverIpv4List();
+  const sameSubnet = own.find(i => parsed.ip && netinfo.ipInSubnet(parsed.ip, i.address, i.prefix));
+  if (netinfo.classifyIpv4(parsed.ip || '') === 'private') {
+    add('Kamera & STB satu subnet', Boolean(sameSubnet),
+      sameSubnet ? `${sameSubnet.iface} = ${sameSubnet.address}/${sameSubnet.prefix}` :
+        `STB: ${own.map(i => i.iface + '=' + i.address + '/' + i.prefix).join(', ') || '(tidak ada IP)'} — kamera: ${parsed.ip}`,
+      'Ini penyebab paling sering. Samakan subnet: bila kamera 192.168.1.x, set antarmuka LAN STB ke 192.168.1.254/24.');
+  }
+
+  // 5. Port RTSP terbuka (TCP)
+  const tcp = await netinfo.probeTcp(target, parsed.port, 4000);
+  const portOpen = add(`Port ${parsed.port} terbuka (TCP)`, tcp.reachable,
+    tcp.reachable ? `${tcp.ms} ms` : (tcp.error || 'ditolak/timeout'),
+    tcp.error === 'waktu_habis'
+      ? 'Tidak ada jawaban: kamera mati, IP salah, kabel/switch bermasalah, atau firewall memblokir.'
+      : `Port ${parsed.port} ditutup. Pastikan port RTSP benar (default 554) dan RTSP diaktifkan di menu kamera.`);
+
+  // 6. ffmpeg tersedia
+  let ffmpegOk = false;
+  try { require('node:child_process').execSync('ffmpeg -version', { stdio: 'ignore' }); ffmpegOk = true; } catch {}
+  add('ffmpeg terpasang di STB', ffmpegOk, ffmpegOk ? `versi mayor ${FFMPEG_MAJOR}` : 'tidak ditemukan',
+    'sudo apt-get install -y ffmpeg');
+
+  // 7. ffmpeg benar-benar bisa membuka stream (menguji kredensial + path sekaligus)
+  let probe = { ok: false, reason: 'tidak dijalankan', codec: null, resolution: null };
+  if (portOpen && ffmpegOk) {
+    probe = await new Promise(resolve => {
+      const args = ['-hide_banner', '-rtsp_transport', 'tcp',
+        `-${ffmpegProfiles.rtspTimeoutFlag(FFMPEG_MAJOR)}`, '8000000',
+        '-i', url, '-t', '1', '-f', 'null', '-'];
+      const ff = spawn('ffmpeg', args);
+      let out = '';
+      let done = false;
+      const finish = (ok, reason) => {
+        if (done) return; done = true;
+        clearTimeout(timer);
+        const codecM = out.match(/Video:\s*([a-z0-9_]+)/i);
+        const resM = out.match(/(\d{2,5}x\d{2,5})/);
+        resolve({ ok, reason, codec: codecM ? codecM[1] : null, resolution: resM ? resM[1] : null });
+      };
+      const timer = setTimeout(() => { try { ff.kill('SIGKILL'); } catch {} finish(false, 'waktu habis (8 detik)'); }, 12000);
+      ff.stderr.on('data', d => { out += d.toString(); });
+      ff.on('error', err => finish(false, `spawn gagal: ${err.message}`));
+      ff.on('close', code => finish(code === 0 || /Video:/.test(out), out.slice(-600)));
+    });
+  } else {
+    probe.reason = portOpen ? 'ffmpeg belum tersedia' : 'port tidak terbuka, probe dilewati';
+  }
+
+  // Bila probe dilewati (port tertutup / ffmpeg belum ada), jangan tampilkan pesan
+  // generik "FFmpeg gagal memproses stream" — itu menyesatkan karena ffmpeg
+  // bahkan tidak sempat mencoba. Tampilkan alasan sebenarnya.
+  const probeSkipped = !portOpen || !ffmpegOk;
+  const parsedErr = (probe.ok || probeSkipped) ? null : parseFfmpegError(probe.reason || '');
+  add('ffmpeg bisa membuka stream', probe.ok,
+    probe.ok ? `${probe.codec || '?'} ${probe.resolution || ''}`.trim() : probe.reason,
+    probe.ok ? null : (probeSkipped
+      ? 'Perbaiki dulu kegagalan di atas; pemeriksaan ini baru berarti bila port terbuka dan ffmpeg tersedia.'
+      : (parsedErr ? parsedErr.message : null)));
+
+  const failed = checks.filter(c => !c.ok);
+  const kesimpulan = failed.length
+    ? `Gagal di: ${failed.map(f => f.label).join(' → ')}`
+    : 'Semua pemeriksaan lolos. Bila gambar tetap tidak muncul, kemungkinan masalah di codec — coba ubah profil kualitas kamera.';
+
+  res.json({
+    ok: failed.length === 0,
+    camera: cam.name,
+    camera_id: cam.id,
+    url: maskUrlSecrets(url),   // sensor password
+    target: `${target}:${parsed.port}`,
+    profile: profileFor(cam),
+    checks,
+    masalah: failed.map(f => `${f.label}: ${f.detail}`),
+    solusi: failed.map(f => f.fix).filter(Boolean),
+    kesimpulan,
+    codec: probe.codec,
+    resolution: probe.resolution,
+    waktu: localNowSql(),
+  });
+});
+
 app.get('/api/version', (req,res)=>{
   res.json({
     version: APP_VERSION,
@@ -1888,6 +2306,7 @@ app.get('/api/version', (req,res)=>{
       camera_net_info: true,
       video_profiles: true,
       stream_auto_restart: true,
+      cloud_backup: true,
       protected_record_media: !RECORDS_OPEN_STATIC
     }
   });
@@ -2251,13 +2670,14 @@ app.post('/api/cameras', auth('admin'), (req,res)=>{
     ? String(c.video_profile).trim() : ffmpegProfiles.DEFAULT_PROFILE;
   const fpsRaw = parseInt(c.video_fps, 10);
   const fps = (Number.isFinite(fpsRaw) && fpsRaw >= 1 && fpsRaw <= 60) ? fpsRaw : null;
-  const stmt = db.prepare(`INSERT INTO cameras (name,location,rtsp_url,nvr_dvr,channel,is_public,lat,lng,youtube_embed,record_enabled,record_schedule,record_duration,retention_days,video_profile,video_fps,auto_restart,is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const stmt = db.prepare(`INSERT INTO cameras (name,location,rtsp_url,nvr_dvr,channel,is_public,lat,lng,youtube_embed,record_enabled,record_schedule,record_duration,retention_days,video_profile,video_fps,auto_restart,cloud_upload,is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const r = stmt.run(
     c.name, c.location||'', rtsp, c.nvr_dvr||'ipcam', c.channel||1, c.is_public?1:0,
     c.lat||null, c.lng||null, ytId||null,
     c.record_enabled?1:0, c.record_schedule||'0 * * * *', c.record_duration||300,
     retention, profile, fps,
     c.auto_restart===false?0:1,
+    c.cloud_upload?1:0,
     c.is_active!==false?1:0
   );
   logActivity('camera.create', `Kamera baru: ${c.name} (${c.nvr_dvr||'ipcam'})`, { req });
@@ -2275,10 +2695,10 @@ app.put('/api/cameras/:id', auth('admin'), (req,res)=>{
     ? String(c.video_profile).trim() : ffmpegProfiles.DEFAULT_PROFILE;
   const fpsRaw = parseInt(c.video_fps, 10);
   const fps = (Number.isFinite(fpsRaw) && fpsRaw >= 1 && fpsRaw <= 60) ? fpsRaw : null;
-  db.prepare(`UPDATE cameras SET name=?,location=?,rtsp_url=?,nvr_dvr=?,channel=?,is_public=?,lat=?,lng=?,youtube_embed=?,record_enabled=?,record_schedule=?,record_duration=?,retention_days=?,video_profile=?,video_fps=?,auto_restart=?,is_active=? WHERE id=?`).run(
+  db.prepare(`UPDATE cameras SET name=?,location=?,rtsp_url=?,nvr_dvr=?,channel=?,is_public=?,lat=?,lng=?,youtube_embed=?,record_enabled=?,record_schedule=?,record_duration=?,retention_days=?,video_profile=?,video_fps=?,auto_restart=?,cloud_upload=?,is_active=? WHERE id=?`).run(
     c.name, c.location, rtsp, c.nvr_dvr, c.channel, c.is_public?1:0,
     c.lat, c.lng, ytId, c.record_enabled?1:0, c.record_schedule, c.record_duration, retention,
-    profile, fps, c.auto_restart===false?0:1, c.is_active?1:0,
+    profile, fps, c.auto_restart===false?0:1, c.cloud_upload?1:0, c.is_active?1:0,
     req.params.id
   );
   // Profil berubah -> stream lama harus diganti, kalau tidak perubahan tidak berlaku.
@@ -2602,36 +3022,6 @@ app.post('/api/stream/:id/start', authOptional, async (req,res)=>{
       if(!s) break;
     }
   }
-
-// Parser error FFmpeg untuk memberikan pesan yang lebih spesifik ke user
-function parseFfmpegError(log) {
-  if (!log) return { type: 'unknown', message: 'Tidak ada log dari FFmpeg.' };
-  const lower = log.toLowerCase();
-  
-  if (lower.includes('401 unauthorized') || lower.includes('authorization failed')) {
-    return { type: 'auth', message: 'Username atau password kamera salah (401 Unauthorized). Silakan periksa kredensial RTSP di menu Kelola Kamera.' };
-  }
-  if (lower.includes('404 not found') || lower.includes('not found')) {
-    return { type: 'notfound', message: 'Path RTSP tidak ditemukan (404). Silakan periksa URL path kamera (contoh: /Streaming/Channels/101 untuk Hikvision, /cam/realmonitor?channel=1&subtype=0 untuk Dahua).' };
-  }
-  if (lower.includes('connection refused') || lower.includes('connection reset')) {
-    return { type: 'offline', message: 'Kamera offline atau port salah. Pastikan kamera menyala dan port RTSP benar (default 554).' };
-  }
-  if (lower.includes('no route to host') || lower.includes('network is unreachable')) {
-    return { type: 'network', message: 'STB tidak bisa menjangkau IP kamera. Pastikan kamera dan STB dalam satu jaringan LAN/WiFi.' };
-  }
-  if (lower.includes('invalid data') || lower.includes('unknown format')) {
-    return { type: 'format', message: 'Format stream kamera tidak dikenal. Coba ubah codec di menu Kelola Kamera ke H.264 atau H.265.' };
-  }
-  if (lower.includes('spawn error') || lower.includes('enoent')) {
-    return { type: 'spawn', message: 'FFmpeg tidak ditemukan di STB. Jalankan: sudo apt install ffmpeg' };
-  }
-  if (lower.includes('cannot assign requested address')) {
-    return { type: 'bind', message: 'Masalah binding jaringan. Coba restart STB atau periksa konfigurasi jaringan.' };
-  }
-  
-  return { type: 'unknown', message: 'FFmpeg gagal memproses stream. Periksa log detail di bawah.' };
-}
 
   // Baca log dari file kalau lastErr masih kosong (FFmpeg sering crash sebelum sempat stderr)
   let logTail = '';
@@ -3306,6 +3696,8 @@ function startRecord(camera) {
     // v2.8: thumbnail untuk pratinjau + notifikasi keluar.
     if (finalStatus === 'completed') {
       enqueueThumbnail(recordRowId, outPath);
+      // v2.9.12: antrekan pencadangan ke cloud bila diaktifkan & kamera dicentang.
+      try { enqueueCloudUpload(recordRowId); } catch {}
       notify('record_completed', '🎬 Rekaman Selesai',
         `Kamera "${camera.name}" merekam ${metrics.elapsed_sec} detik (${metrics.size_mb} MB).`,
         { cameraId: camera.id, cameraName: camera.name, key: `rec-ok-${camera.id}`, cooldown: 0 });
@@ -3909,18 +4301,28 @@ app.get('/api/system/onvif-discover', auth('admin'), (req, res) => {
 async function autoCleanupDisk() {
   try {
     let disk = await getDiskSpace();
-    if (disk.used_percent < 90) return; // space is safe!
+    // v2.9.12: ambang bisa diatur lewat Pengaturan (bawaan 85%). Sebelumnya
+    // hardcoded 90% — terlalu mepet, karena di SD card lambat pembersihan bisa
+    // kalah cepat dari perekaman yang terus berjalan.
+    const threshold = cloudConfig().cleanupPercent;
+    if (disk.used_percent < threshold) return; // space is safe!
 
-    console.log(`⚠️ Disk is almost full (${disk.used_percent}% used). Starting auto-cleanup of oldest recordings...`);
+    console.log(`⚠️ Disk ${disk.used_percent}% terpakai (ambang ${threshold}%). Pembersihan otomatis dimulai...`);
     notify('disk_critical', '💾 Penyimpanan Hampir Penuh',
-      `Disk rekaman terpakai ${disk.used_percent}% (sisa ${disk.free_gb} GB dari ${disk.total_gb} GB). Pembersihan otomatis rekaman terlama dijalankan.`,
+      `Disk rekaman terpakai ${disk.used_percent}% (sisa ${disk.free_gb} GB dari ${disk.total_gb} GB). Ambang ${threshold}%. Pembersihan otomatis rekaman terlama dijalankan.`,
       { key: 'disk' });
-    logActivity('storage.disk_critical', `Disk ${disk.used_percent}% terpakai — pembersihan otomatis dimulai`,
+    logActivity('storage.disk_critical', `Disk ${disk.used_percent}% terpakai (ambang ${threshold}%) — pembersihan otomatis dimulai`,
       { actor: 'system', actorRole: 'system', level: 'warn' });
-    
-    // Fetch completed records ordered by start_time ascending (oldest first)
-    const oldestRecords = db.prepare("SELECT * FROM records WHERE status='completed' ORDER BY start_time ASC LIMIT 50").all();
-    
+
+    // v2.9.12: UTAMAKAN yang sudah terunggah ke cloud. Rekaman yang sudah aman
+    // di cloud tidak menimbulkan kehilangan data, jadi dihapus lebih dulu.
+    // Baru setelah itu rekaman paling lama yang belum terunggah.
+    const uploaded = db.prepare(
+      "SELECT * FROM records WHERE status='completed' AND cloud_status='uploaded' ORDER BY start_time ASC LIMIT 50").all();
+    const notUploaded = db.prepare(
+      "SELECT * FROM records WHERE status='completed' AND (cloud_status IS NULL OR cloud_status != 'uploaded') ORDER BY start_time ASC LIMIT 50").all();
+    const oldestRecords = uploaded.concat(notUploaded);
+
     for (const rec of oldestRecords) {
       if (rec.file_path) {
         const fp = path.join(__dirname, 'public', rec.file_path);
@@ -3941,8 +4343,9 @@ async function autoCleanupDisk() {
       disk = await getDiskSpace();
       console.log(`Rechecking disk space: ${disk.used_percent}% used`);
       
-      if (disk.used_percent < 80) {
-        console.log(`✅ Auto-cleanup complete. Disk space reclaimed, currently at ${disk.used_percent}% used.`);
+      // Berhenti 5 persen di bawah ambang agar tidak bolak-balik membersihkan.
+      if (disk.used_percent < threshold - 5) {
+        console.log(`✅ Pembersihan selesai. Disk kini ${disk.used_percent}% terpakai.`);
         break;
       }
     }

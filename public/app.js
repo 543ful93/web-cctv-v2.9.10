@@ -182,6 +182,35 @@ const i18n = {
     camera_name_req: "Nama Kamera *",
     location: "Lokasi",
     stream_type: "Tipe Stream / DVR",
+    cloud_title: "Cadangkan Rekaman ke Google Drive",
+    cloud_s1: "Pasang rclone di STB",
+    cloud_s2: "Hubungkan Google Drive (salin-tempel dari laptop)",
+    cloud_s3: "Pilih remote & aktifkan",
+    cloud_p1: "Di laptop/PC (yang ada browsernya), pasang rclone.",
+    cloud_p2: "Jalankan rclone config lalu ikuti petunjuknya.",
+    cloud_p3: "Buka berkas konfigurasinya dan salin seluruh isinya.",
+    cloud_p4: "Tempel di kotak bawah ini, lalu klik Simpan & Hubungkan.",
+    cloud_paste_btn: "Simpan & Hubungkan",
+    cloud_paste_note: "Token Google Drive disimpan hanya di berkas rclone.conf di STB (izin 600) dan tidak pernah dikirim balik ke browser.",
+    cloud_install: "Pasang rclone Otomatis",
+    cloud_step1: "Langkah 1 — Pasang rclone",
+    cloud_step2: "Langkah 2 — Konfigurasi remote lewat SSH (sekali saja)",
+    cloud_ssh_hint: "Google Drive butuh login lewat browser, sedangkan STB tidak punya layar. Karena itu konfigurasinya Anda lakukan sendiri lewat SSH — aplikasi ini tidak pernah menyimpan token cloud Anda.",
+    cloud_refresh: "Muat Ulang Daftar Remote",
+    cloud_remote: "Remote",
+    cloud_folder: "Folder di Cloud",
+    cloud_cleanup: "Pembersihan Disk pada (%)",
+    cloud_cleanup_hint: "Rekaman terlama dihapus otomatis saat disk melewati angka ini. Yang sudah terunggah ke cloud dihapus lebih dulu.",
+    cloud_enable: "Aktifkan pencadangan otomatis",
+    cloud_enable_hint: "Rekaman diunggah setelah selesai, satu per satu agar tidak membebani STB.",
+    cloud_delete_after: "Hapus lokal segera setelah terunggah",
+    cloud_delete_after_hint: "Hemat disk maksimal, tapi tidak ada cadangan lokal. Biarkan MATI bila disk Anda cukup.",
+    cloud_save: "Simpan Konfigurasi",
+    cloud_test: "Uji Remote",
+    cloud_retry: "Ulangi yang Gagal",
+    cloud_percam_hint: "Rekaman hanya diunggah untuk kamera yang dicentang. Buka Kelola Kamera → edit kamera → centang \"Cadangkan ke Cloud\".",
+    cam_cloud_upload: "Cadangkan rekaman kamera ini ke Cloud",
+    cam_cloud_upload_hint: "Hanya berlaku bila pencadangan cloud diaktifkan di Pengaturan. Rekaman tetap disimpan lokal sampai batas retensi.",
     cam_quality_title: "Kualitas Gambar & Kestabilan Stream",
     cam_profile: "Profil Kualitas",
     cam_fps: "Batas FPS",
@@ -1031,6 +1060,7 @@ function navigateToView(viewId) {
     loadBrandingSettings();
     loadTunnelStatus();
     loadNetworkInfo();
+    loadCloudStatus();
   } else if (viewId === "activity") {
     loadActivityLog();
   }
@@ -1793,6 +1823,238 @@ async function doResetSettings() {
   } finally {
     if (btn) { btn.textContent = L ? "Ya, Reset Sekarang" : "Yes, Reset Now"; onResetConfirmInput(); }
   }
+}
+
+// =====================================================================
+// v2.9.12 — PENCADANGAN REKAMAN KE CLOUD (rclone)
+// ---------------------------------------------------------------------
+// Kredensial cloud TIDAK dikelola aplikasi: pengguna menjalankan `rclone config`
+// sendiri lewat SSH, aplikasi hanya membaca remote yang sudah ada.
+// =====================================================================
+async function loadCloudStatus() {
+  const box = document.getElementById("cloud-state");
+  if (!box) return;
+  const L = currentLanguage === "id";
+  box.innerHTML = `<span class="text-slate-500"><i class="fa-solid fa-spinner animate-spin mr-1"></i>${L ? "Memuat..." : "Loading..."}</span>`;
+  try {
+    const res = await fetch("/api/cloud/status", { headers: { Authorization: `Bearer ${safeStorage.getItem("token")}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    renderCloudState(d);
+  } catch (err) {
+    box.innerHTML = `<span class="text-red-400">${escHtml(err.message)}</span>`;
+  }
+}
+
+function renderCloudState(d) {
+  const box = document.getElementById("cloud-state");
+  if (!box) return;
+  const L = currentLanguage === "id";
+  const r = d.rclone || {};
+  const c = d.config || {};
+  const q = d.queue || {};
+  const n = d.counts || {};
+
+  const row = (label, value, cls = "text-slate-200") =>
+    `<div class="flex justify-between gap-3"><span class="text-slate-500">${escHtml(label)}</span><span class="${cls} font-mono">${value}</span></div>`;
+
+  box.innerHTML = `
+    <div class="bg-slate-950/60 border border-slate-800 rounded-lg p-3 space-y-1">
+      ${row("rclone", r.installed ? `✅ v${escHtml(r.version || "?")}` : `<span class="text-amber-400">${L ? "belum terpasang" : "not installed"}</span>`)}
+      ${row("rclone.conf", r.has_config ? `✅ <span class="text-slate-400">${escHtml(r.config_path)}</span>` : `<span class="text-amber-400">${L ? "belum ada — jalankan rclone config" : "missing — run rclone config"}</span>`)}
+      ${row("Remote dipilih", c.remote ? escHtml(c.remote) : `<span class="text-amber-400">-</span>`)}
+      ${row("Antrean", `${q.pending || 0} ${L ? "menunggu" : "pending"}${q.uploading ? `, 1 ${L ? "sedang diunggah" : "uploading"}` : ""}`)}
+      ${row("Terunggah", String(n.uploaded || 0), "text-emerald-400")}
+      ${row("Gagal", String(n.failed || 0), n.failed ? "text-red-400" : "text-slate-200")}
+      ${d.state && d.state.lastError ? row("Error terakhir", `<span class="text-red-400">${escHtml(String(d.state.lastError).slice(0, 80))}</span>`) : ""}
+    </div>`;
+
+  // isi pilihan remote
+  const sel = document.getElementById("cloud-remote");
+  if (sel) {
+    const remotes = r.remotes || [];
+    sel.innerHTML = (remotes.length ? "" : `<option value="">${L ? "— belum ada remote —" : "— no remote —"}</option>`) +
+      remotes.map(x => `<option value="${escHtml(x.name)}"${x.name === c.remote ? " selected" : ""}>${escHtml(x.name)}${x.type ? ` (${escHtml(x.type)})` : ""}</option>`).join("");
+    if (!sel.value && c.remote) sel.value = c.remote;
+  }
+  const set = (id, v) => { const e = document.getElementById(id); if (e && v !== undefined && v !== null) e.value = v; };
+  const chk = (id, v) => { const e = document.getElementById(id); if (e) e.checked = Boolean(v); };
+  set("cloud-folder", c.folder);
+  set("cloud-cleanup-percent", c.cleanupPercent);
+  chk("cloud-enabled", c.enabled);
+  chk("cloud-delete-after", c.deleteAfterUpload);
+
+  const btn = document.getElementById("cloud-install-btn");
+  if (btn) { btn.disabled = Boolean(r.installed); btn.classList.toggle("opacity-50", Boolean(r.installed)); }
+}
+
+async function cloudInstall() {
+  const L = currentLanguage === "id";
+  showToast(L ? "Memasang rclone... (bisa 1-3 menit)" : "Installing rclone... (may take 1-3 min)", "info");
+  try {
+    const res = await fetch("/api/cloud/install", { method: "POST", headers: { Authorization: `Bearer ${safeStorage.getItem("token")}` } });
+    const d = await res.json();
+    if (!d.ok) throw new Error(d.error || (d.hint || `HTTP ${res.status}`));
+    showToast(L ? `rclone terpasang (${d.method || "sudah ada"}) v${d.version}` : `rclone installed via ${d.method}`, "success");
+    loadCloudStatus();
+  } catch (err) { showToast(err.message, "error"); }
+}
+
+/**
+ * Simpan konfigurasi rclone yang ditempel pengguna.
+ * Jalur paling sederhana: salin rclone.conf dari laptop, tempel di sini.
+ * Token TIDAK PERNAH dikirim balik ke browser.
+ */
+async function cloudPasteConfig() {
+  const L = currentLanguage === "id";
+  const ta = document.getElementById("cloud-paste");
+  if (!ta) return;
+  const text = ta.value.trim();
+  if (!text) { showToast(L ? "Tempel dulu isi rclone.conf." : "Paste the rclone.conf content first.", "error"); return; }
+  if (!/\[[^\]]+\]/.test(text)) {
+    showToast(L ? "Tidak ditemukan [nama_remote]. Salin seluruh isi berkas, termasuk baris [gdrive]."
+                 : "No [remote_name] found. Copy the whole file, including the [gdrive] line.", "error");
+    return;
+  }
+  showToast(L ? "Menyimpan konfigurasi..." : "Saving config...", "info");
+  try {
+    const res = await fetch("/api/cloud/paste-config", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${safeStorage.getItem("token")}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ config: text }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || `HTTP ${res.status}`);
+
+    const names = (d.remotes || []).map(r => r.name);
+    showToast(L
+      ? `Berhasil. Remote tersedia: ${names.join(", ") || "-"}`
+      : `Saved. Available remotes: ${names.join(", ") || "-"}`, "success");
+
+    // Kosongkan kotak agar token tidak tertinggal di layar.
+    ta.value = "";
+
+    // Pilih otomatis bila hanya ada satu remote — satu langkah lebih sedikit.
+    const sel = document.getElementById("cloud-remote");
+    if (sel && names.length === 1) sel.value = names[0];
+    loadCloudStatus();
+  } catch (err) { showToast(err.message, "error"); }
+}
+
+async function saveCloudConfig() {
+  const L = currentLanguage === "id";
+  const body = {
+    cloud_enabled: document.getElementById("cloud-enabled").checked ? "1" : "0",
+    cloud_remote: document.getElementById("cloud-remote").value || "",
+    cloud_folder: document.getElementById("cloud-folder").value.trim() || "WebCCTV",
+    cloud_delete_after_upload: document.getElementById("cloud-delete-after").checked ? "1" : "0",
+    disk_cleanup_percent: String(document.getElementById("cloud-cleanup-percent").value || "85"),
+  };
+  try {
+    const res = await fetch("/api/cloud/config", {
+      method: "POST", headers: { Authorization: `Bearer ${safeStorage.getItem("token")}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    showToast(L ? "Konfigurasi cloud tersimpan." : "Cloud config saved.", "success");
+    loadCloudStatus();
+  } catch (err) { showToast(err.message, "error"); }
+}
+
+async function testCloudRemote() {
+  const L = currentLanguage === "id";
+  showToast(L ? "Menguji remote..." : "Testing remote...", "info");
+  try {
+    const res = await fetch("/api/cloud/test", { method: "POST", headers: { Authorization: `Bearer ${safeStorage.getItem("token")}` } });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    showToast(d.ok
+      ? (L ? "Remote bisa dipakai." : "Remote works.")
+      : (L ? `Remote gagal: ${d.detail || ""}` : `Remote failed: ${d.detail || ""}`),
+      d.ok ? "success" : "error");
+  } catch (err) { showToast(err.message, "error"); }
+}
+
+async function retryFailedUploads() {
+  const L = currentLanguage === "id";
+  try {
+    const res = await fetch("/api/cloud/upload", {
+      method: "POST", headers: { Authorization: `Bearer ${safeStorage.getItem("token")}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ retry_failed: true }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    showToast(L ? `${d.queued} rekaman dimasukkan ulang ke antrean.` : `${d.queued} recording(s) re-queued.`, "success");
+    loadCloudStatus();
+  } catch (err) { showToast(err.message, "error"); }
+}
+
+// =====================================================================
+// v2.9.11 — DIAGNOSTIK RTSP ("kenapa Offline / Connection fail?")
+// ---------------------------------------------------------------------
+// Pesan "Offline / Connection fail" dipakai untuk banyak penyebab berbeda.
+// Fungsi ini meminta backend memeriksa tiap titik kegagalan berurutan dan
+// menampilkan langkah mana yang gagal beserta cara memperbaikinya.
+// =====================================================================
+async function diagnoseCamera(id) {
+  const L = currentLanguage === "id";
+  const btn = document.getElementById(`diag-btn-${id}`);
+  if (btn) { btn.disabled = true; btn.classList.add("opacity-50"); }
+  showToast(L ? "Memeriksa kamera... (bisa 10-20 detik)" : "Diagnosing camera... (may take 10-20s)", "info");
+  try {
+    const res = await fetch(`/api/cameras/${id}/diagnose`, {
+      headers: { Authorization: `Bearer ${safeStorage.getItem("token")}` }
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    showDiagnoseModal(d);
+  } catch (err) {
+    showToast(err.message, "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove("opacity-50"); }
+  }
+}
+
+function showDiagnoseModal(d) {
+  const L = currentLanguage === "id";
+  let modal = document.getElementById("modal-diagnose");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "modal-diagnose";
+    modal.className = "fixed inset-0 z-[100] bg-slate-950/80 backdrop-blur-sm items-center justify-center p-4";
+    modal.innerHTML = `<div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-5 space-y-3 shadow-2xl">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h3 class="font-bold text-white text-sm md:text-base flex items-center gap-2">
+            <i class="fa-solid fa-stethoscope text-amber-400"></i>
+            <span>${L ? "Diagnostik Kamera" : "Camera Diagnostics"}</span>
+          </h3>
+          <p id="diag-sub" class="text-[11px] text-slate-400 mt-0.5 font-mono"></p>
+        </div>
+        <button onclick="document.getElementById('modal-diagnose').classList.add('hidden');document.getElementById('modal-diagnose').classList.remove('flex')"
+          class="text-slate-400 hover:text-white bg-slate-800 rounded-lg w-8 h-8 border-0 cursor-pointer"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="diag-list" class="space-y-1.5"></div>
+      <div id="diag-conclusion" class="text-[11px] rounded-lg px-3 py-2"></div>
+    </div>`;
+    document.body.appendChild(modal);
+  }
+  document.getElementById("diag-sub").textContent = `${d.camera} → ${d.target}  ·  profil: ${d.profile}` + (d.codec ? `  ·  codec: ${d.codec} ${d.resolution || ""}` : "");
+  document.getElementById("diag-list").innerHTML = (d.checks || []).map(c => `
+    <div class="flex items-start gap-2 text-[11px] rounded-lg px-2.5 py-2 ${c.ok ? "bg-emerald-500/5" : "bg-red-500/10"}">
+      <i class="fa-solid ${c.ok ? "fa-circle-check text-emerald-400" : "fa-circle-xmark text-red-400"} mt-0.5"></i>
+      <div class="min-w-0">
+        <div class="font-semibold ${c.ok ? "text-emerald-200" : "text-red-200"}">${escHtml(c.label)}</div>
+        <div class="text-slate-400 font-mono break-words">${escHtml(c.detail)}</div>
+        ${c.fix ? `<div class="text-amber-300/90 mt-1"><i class="fa-solid fa-wrench mr-1"></i>${escHtml(c.fix)}</div>` : ""}
+      </div>
+    </div>`).join("");
+  const conc = document.getElementById("diag-conclusion");
+  conc.className = `text-[11px] rounded-lg px-3 py-2 ${d.ok ? "bg-emerald-500/10 text-emerald-200" : "bg-amber-500/10 text-amber-200"}`;
+  conc.textContent = d.kesimpulan;
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
 }
 
 // =====================================================================
@@ -2973,7 +3235,15 @@ async function initLeafletMap() {
           console.error("Popup stream fail:", err);
           const splashText = splash ? splash.querySelector("p") : null;
           const splashIcon = splash ? splash.querySelector("i") : null;
-          if (splashText) splashText.innerText = "Offline / Connection fail";
+          // Backend sudah menghasilkan pesan spesifik (salah password, path 404,
+          // connection refused, no route to host, dst). Dulu pesan itu DIBUANG dan
+          // diganti "Offline / Connection fail" untuk semua error, jadi pengguna
+          // tidak tahu harus memperbaiki apa. Sekarang pesan aslinya ditampilkan.
+          const detail = (err && err.message) ? err.message : "";
+          if (splashText) {
+            splashText.innerText = detail || (currentLanguage === 'id' ? "Offline / Gagal tersambung" : "Offline / Connection fail");
+            splashText.classList.add("text-[10px]");
+          }
           if (splashIcon) {
             splashIcon.className = "fa-solid fa-triangle-exclamation text-red-500 text-base";
             splashIcon.classList.remove("animate-spin");
@@ -4134,6 +4404,9 @@ async function loadAdminCameras() {
         <td class="p-3 md:p-4 hidden lg:table-cell">${recBadge}</td>
         <td class="p-3 md:p-4 text-right">
           <div class="flex items-center justify-end space-x-1.5">
+            <button id="diag-btn-${cam.id}" onclick="diagnoseCamera(${cam.id})" class="text-amber-400 hover:text-amber-300 bg-amber-500/10 p-1.5 rounded transition inline-flex items-center text-xs border-0 cursor-pointer" title="${currentLanguage === 'id' ? 'Diagnostik RTSP: cari tahu kenapa Offline' : 'RTSP diagnostics: find out why it is Offline'}">
+              <i class="fa-solid fa-stethoscope"></i>
+            </button>
             <button id="probe-btn-${cam.id}" onclick="probeCameraPath(${cam.id})" class="text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 p-1.5 rounded transition inline-flex items-center text-xs border-0 cursor-pointer" title="${currentLanguage === 'id' ? 'Uji jalur jaringan (TCP cepat)' : 'Test network path (fast TCP)'}">
               <i class="fa-solid fa-network-wired"></i>
             </button>
@@ -4218,6 +4491,8 @@ async function openCameraFormModal(camId = null) {
     if (fpsEl) fpsEl.value = cam.video_fps || "";
     const arEl = document.getElementById("cam-autorestart");
     if (arEl) arEl.checked = cam.auto_restart !== 0;
+    const cuEl = document.getElementById("cam-cloud-upload");
+    if (cuEl) cuEl.checked = Number(cam.cloud_upload) === 1;
     onCamProfileChange();
     document.getElementById("cam-yt").value = cam.youtube_embed || "";
     document.getElementById("cam-lat").value = cam.lat !== null ? cam.lat : "";
@@ -4310,6 +4585,7 @@ async function handleSaveCamera(e) {
     video_profile: (document.getElementById("cam-profile") || {}).value || "540p",
     video_fps: (() => { const v = parseInt((document.getElementById("cam-fps") || {}).value, 10); return Number.isFinite(v) && v > 0 ? v : null; })(),
     auto_restart: (document.getElementById("cam-autorestart") || {}).checked !== false,
+    cloud_upload: (document.getElementById("cam-cloud-upload") || {}).checked ? 1 : 0,
     youtube_embed: document.getElementById("cam-yt").value,
     lat: parseFloat(document.getElementById("cam-lat").value) || null,
     lng: parseFloat(document.getElementById("cam-lng").value) || null,

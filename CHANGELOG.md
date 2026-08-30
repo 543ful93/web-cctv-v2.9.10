@@ -1,5 +1,230 @@
 # Changelog
 
+## v2.9.13
+
+Menjawab keluhan *"cara konek ke Drive-nya agar lebih simpel dan tidak bingung"*.
+
+### ✨ Cara menghubungkan Google Drive disederhanakan
+
+Sebelumnya pengguna harus **SSH ke STB** lalu menjalankan `rclone config` secara interaktif
+di perangkat tanpa layar — membingungkan dan sering gagal di langkah OAuth.
+
+Sekarang cukup **salin-tempel dari laptop**:
+
+1. **Pasang rclone di STB** — satu tombol di dashboard.
+2. **Di laptop** (yang punya browser): pasang rclone, jalankan `rclone config`, pilih
+   `google`, login lewat browser yang terbuka. Lalu buka `rclone.conf` dan **salin isinya**.
+3. **Tempel di dashboard** → **Simpan & Hubungkan**. Selesai.
+
+Tidak perlu SSH, tidak perlu paham `rclone config` di STB. Cara SSH tetap tersedia bagi yang
+lebih suka.
+
+* **Endpoint baru `POST /api/cloud/paste-config`** — menerima tempelan `rclone.conf`,
+  memvalidasi, dan menulisnya ke STB.
+* **Endpoint baru di lib: `writeRemoteBlocks()`** — memilah tempelan per bagian `[nama]`,
+  memvalidasi tiap bagian punya `type = ...`, lalu menggabungkan dengan `rclone.conf` yang
+  sudah ada. Bagian dengan nama sama **diperbarui**, bukan diduplikasi.
+* **Bila hanya ada satu remote, dashboard memilihnya otomatis** — satu langkah lebih sedikit.
+* **Kotak tempel dikosongkan setelah disimpan** agar token tidak tertinggal di layar.
+
+### 🔒 Keamanan tempelan
+
+Tempelan berisi **token akses Google Drive**, jadi diperlakukan sebagai rahasia:
+
+* Berkas ditulis dengan **mode 0600** (hanya pemilik yang bisa membaca). Diverifikasi:
+  `-rw-------`.
+* **Isi berkas TIDAK PERNAH dikembalikan di respons** — hanya nama remote. Diverifikasi
+  dengan memindai seluruh respons terhadap string token: tidak bocor.
+* **Token disensor di log aktivitas** lewat `maskSecrets()` / `maskTokenValue()`
+  (`ya29.a0AR…0Z (177 karakter)`).
+* **Validasi sebelum menulis**: tempelan tanpa bagian `[nama_remote]` ditolak dengan pesan
+  yang menjelaskan apa yang kurang; bagian tanpa `type = ...` ditolak sebagai kemungkinan
+  salinan terpotong.
+
+### 📖 Dokumentasi
+
+README bagian cloud ditulis ulang sebagai **3 langkah bernomor** dengan:
+
+* perintah pasang rclone per sistem operasi (Windows/Mac/Linux)
+* **tabel tanya-jawab** `rclone config` (apa yang ditanya, apa yang harus diketik)
+* lokasi `rclone.conf` per sistem operasi
+* contoh isi berkas
+* gambaran struktur folder di Google Drive
+* catatan apa yang harus dilakukan bila token kedaluwarsa
+
+### 🧪 Pengujian
+
+Diuji lewat API dengan rclone sungguhan:
+
+* tempelan sah → `ok`, remote `gdrive` terbaca oleh rclone
+* izin berkas **600** (`-rw-------`)
+* **token tidak bocor** di respons (dipindai terhadap string token)
+* tempelan tanpa header ditolak dengan pesan jelas
+* tempelan tanpa `type = ...` ditolak sebagai salinan terpotong
+* tempel ulang nama sama → **diperbarui** (`[gdrive]` tetap 1) dan remote lain
+  (`[localtest]`) **tidak hilang**
+* `npm test` tetap hijau.
+
+### 📝 Catatan
+
+* **Belum diuji dengan akun Google Drive sungguhan** — lingkungan uji tidak punya akun cloud.
+  Yang diuji adalah penulisan `rclone.conf`, pembacaan remote oleh rclone, dan keamanan
+  tempelan. Alur OAuth Google sendiri diurus rclone di laptop pengguna.
+* Kalau token kedaluwarsa, dashboard menampilkan errornya tetapi tidak bisa memperbaruinya
+  sendiri (token tidak disimpan aplikasi). Ulangi langkah di laptop lalu tempel lagi.
+
+## v2.9.12
+
+### ✨ Fitur Baru
+
+**Pencadangan rekaman ke cloud (rclone) + pembersihan disk terjadwal**
+
+* **`lib/rclone.js`** — pembungkus rclone. Bisa memasang rclone otomatis
+  (mencoba `apt-get` → `sudo apt-get` → skrip resmi → `sudo` skrip resmi), membaca
+  daftar remote, mengunggah, dan menguji remote.
+* **Kredensial TIDAK dikelola aplikasi.** Google Drive butuh OAuth lewat browser,
+  sedangkan STB tidak punya layar. Karena itu pengguna menjalankan `rclone config`
+  sendiri lewat SSH (sekali), dan aplikasi **hanya membaca** remote yang sudah ada
+  lewat `rclone listremotes`. Aplikasi **tidak pernah** membaca atau mengembalikan isi
+  `rclone.conf` — token cloud tidak pernah melewati HTTP.
+* **Unggahan berjalan serial** dalam satu antrean. STB hanya punya sedikit CPU/RAM;
+  mengunggah paralel akan membuat rekaman live tersendat.
+  Dipakai `--transfers 1 --checkers 1 --retries 2`.
+* **Struktur di cloud**: `<remote>/<folder>/<nama-kamera>/<tanggal>/<nama-file>`.
+  Nama kamera **disanitasi** — `../../etc` menjadi `.._.._etc`, jadi path traversal
+  tidak mungkin.
+* **Per kamera**: rekaman hanya diunggah untuk kamera yang dicentang
+  *"Cadangkan rekaman kamera ini ke Cloud"*. Hemat kuota & penyimpanan cloud.
+* **Status per rekaman** di kolom baru: `pending` / `uploading` / `uploaded` /
+  `failed` / `skipped`, lengkap dengan path di cloud dan pesan error.
+* **Tombol "Ulangi yang Gagal"** memasukkan ulang semua yang gagal ke antrean.
+* **Endpoint**: `GET /api/cloud/status`, `POST /api/cloud/install`,
+  `POST /api/cloud/config`, `POST /api/cloud/test`, `POST /api/cloud/upload`.
+* **Panel Pengaturan** berisi status rclone, langkah konfigurasi lewat SSH, pilihan
+  remote, folder, dan ambang pembersihan disk.
+
+**Pembersihan disk terjadwal yang lebih aman**
+
+* **Ambang bisa diatur** (`disk_cleanup_percent`, bawaan **85%**). Sebelumnya hardcoded
+  **90%** — terlalu mepet, karena di SD card lambat pembersihan bisa kalah cepat dari
+  perekaman yang terus berjalan.
+* **Yang sudah terunggah ke cloud dihapus lebih dulu.** Rekaman yang sudah aman di cloud
+  tidak menimbulkan kehilangan data, jadi didahulukan. Baru kemudian rekaman paling lama
+  yang belum terunggah.
+* Pembersihan berhenti **5% di bawah ambang**, agar tidak bolak-balik membersihkan.
+* Opsi **"Hapus lokal segera setelah terunggah"** tersedia tetapi **MATI secara bawaan** —
+  sesuai pilihan untuk tetap menyimpan lokal sampai batas retensi.
+
+### 🐛 Perbaikan Bug
+
+* **`rclone install` gagal saat aplikasi bukan root.** Percobaan pertama hanya
+  `apt-get install` tanpa sudo, yang gagal dengan *Permission denied* pada banyak
+  pemasangan. Kini mencoba empat cara berurutan.
+* **`testRemote` memberi hasil salah.** Uji memakai `rclone lsd`, yang membalas
+  *"directory not found"* untuk folder yang belum ada — dan itu **bukan** kegagalan,
+  melainkan keadaan normal sebelum unggahan pertama. Pola pencocokan juga keliru
+  menganggap pesan itu sebagai kegagalan autentikasi. Diganti dengan **mengunggah
+  berkas uji sungguhan lalu menghapusnya**, dan pesan error diklasifikasikan
+  (remote tidak ada vs autentikasi gagal).
+* **Unggahan berkas 0 byte** ditolak dengan pesan jelas, bukan menghasilkan berkas
+  kosong di cloud.
+
+### 🧪 Pengujian
+
+* **Diuji dengan rclone sungguhan** (v1.60.1 terpasang lewat `sudo apt-get`) dan remote
+  lokal, bukan hanya unit test:
+  * pemasangan otomatis berhasil (`ok: true, method: "sudo apt"`)
+  * daftar remote terbaca (`[{name:"localtest", type:"local"}]`)
+  * sanitasi path: `../../etc` → `.._.._etc`
+  * unggahan nyata **berhasil**: berkas 13.185 byte sampai di
+    `localtest/WebCCTV/Kaligandu_Serang__HLS_/2026-06-21/2026-06-21T21-00-00.mp4`
+    dan tercatat di log aktivitas
+  * berkas 0 byte ditolak (`berkas kosong (0 byte)`)
+  * berkas tidak ada ditolak (`berkas lokal tidak ada`)
+  * `testRemote` kini `ok: true` setelah perbaikan
+* `npm test` tetap hijau.
+
+### ⚙️ Variabel lingkungan baru
+
+| Variabel | Fungsi |
+|---|---|
+| `RCLONE_BIN` | Lokasi biner rclone bila tidak di `PATH` |
+| `RCLONE_CONFIG` | Lokasi `rclone.conf` bila bukan di lokasi bawaan |
+
+### 📝 Catatan
+
+* **Belum diuji dengan Google Drive sungguhan** — lingkungan uji tidak punya akun cloud.
+  Yang diuji adalah remote **lokal** rclone, yang memakai jalur kode unggahan yang sama.
+  Autentikasi Google Drive (OAuth, penyegaran token) diurus rclone sendiri, bukan aplikasi ini.
+* Karena kredensial dikelola rclone, bila token Google Drive kedaluwarsa Anda perlu
+  menjalankan `rclone config` ulang lewat SSH. Aplikasi akan melaporkan errornya, tetapi
+  tidak bisa memperbaruinya sendiri.
+
+## v2.9.11
+
+Menjawab pertanyaan *"kenapa RTSP Offline / Connection fail, ada solusi?"*.
+
+### 🔍 Diagnostik RTSP per kamera
+
+Pesan **"Offline / Connection fail"** dipakai untuk **banyak penyebab berbeda** — salah
+password, path RTSP salah, port ditutup, kamera beda subnet, ffmpeg belum terpasang. Tanpa
+pemeriksaan bertahap, pengguna hanya bisa coba-coba.
+
+* **Endpoint baru `GET /api/cameras/:id/diagnose`** memeriksa tiap titik kegagalan
+  **berurutan** dan melaporkan langkah mana yang gagal beserta cara memperbaikinya:
+
+  | # | Yang diperiksa | Contoh solusi yang diberikan |
+  |---|---|---|
+  | 1 | URL terisi | Isi URL; pakai Asisten Pembuat RTSP |
+  | 2 | URL bisa diurai | Format harus `rtsp://[user:pass@]IP:554/path` |
+  | 3 | Nama host bisa di-resolve (DNS) | Pakai IP langsung; nama `.local` butuh `avahi-daemon` |
+  | 4 | STB punya rute ke IP kamera | Beri antarmuka LAN STB IP di subnet kamera |
+  | 5 | **Kamera & STB satu subnet** | **Penyebab paling sering** — samakan subnet |
+  | 6 | Port RTSP terbuka (TCP) | Pastikan port benar (554) & RTSP aktif di kamera |
+  | 7 | ffmpeg terpasang | `sudo apt-get install -y ffmpeg` |
+  | 8 | ffmpeg bisa membuka stream | Menguji kredensial + path sekaligus; melaporkan codec & resolusi |
+
+* **Tombol 🩺 di Kelola Kamera** membuka modal berisi hasil pemeriksaan: tiap langkah
+  ✅/❌, detail teknis, dan cara memperbaikinya.
+* Pemeriksaan 5 ("satu subnet") sengaja ditonjolkan karena inilah penyebab paling umum
+  pada pemasangan STB + switch hub.
+
+### 🐛 Perbaikan Bug
+
+* **Penyebab error yang sebenarnya DIBUANG.** Popup peta menampilkan
+  `"Offline / Connection fail"` untuk **semua** error, padahal backend sudah menghasilkan
+  pesan spesifik (401 Unauthorized, 404 Not Found, Connection refused, No route to host,
+  Invalid data, ffmpeg tidak ditemukan). Pesan asli kini ditampilkan.
+* **`parseFfmpegError()` tidak terjangkau.** Fungsi itu terdefinisi **di dalam** handler
+  `POST /api/stream/:id/start`, sehingga tidak bisa dipakai endpoint lain — endpoint
+  diagnostik baru langsung `ReferenceError` saat pertama dijalankan. Dipindah ke cakupan
+  modul.
+* **Pesan menyesatkan saat probe dilewati.** Bila port tertutup, probe ffmpeg tidak
+  dijalankan, tetapi hasilnya tetap dilaporkan sebagai *"FFmpeg gagal memproses stream"* —
+  padahal ffmpeg bahkan tidak sempat mencoba. Kini menampilkan alasan sebenarnya.
+* **Password kamera bocor di respons diagnostik.** URL disensor di satu tempat tetapi
+  **tidak** di `checks[0].detail`, sehingga `rtsp://admin:rahasia123@...` tetap terkirim ke
+  klien. Diperiksa dengan memindai seluruh respons; kini satu fungsi `maskUrlSecrets()`
+  dipakai di semua titik dan diverifikasi tidak ada kebocoran.
+
+### 🧪 Pengujian
+
+* Diagnostik diuji terhadap **empat skenario gagal nyata**, bukan hanya "tidak error":
+  IP tak terjangkau, kamera beda subnet, URL tanpa skema, dan hostname yang tidak
+  bisa di-resolve. Tiap skenario menghasilkan langkah gagal yang **berbeda** dan solusi
+  yang sesuai.
+* Kebocoran password diverifikasi dengan memindai **seluruh** respons JSON terhadap string
+  password, bukan hanya memeriksa satu field.
+* `npm test` → **784 asersi, 0 gagal**.
+
+### 📝 Catatan
+
+* Diagnostik ini diuji terhadap **skenario gagal yang dibuat** (IP tak terjangkau, subnet
+  berbeda, hostname tak resolve). Belum diuji terhadap **kamera IP sungguhan** yang
+  menolak karena password salah atau path salah — lingkungan uji tidak punya kamera.
+* Pemeriksaan "ffmpeg bisa membuka stream" menjalankan ffmpeg sungguhan hingga ~12 detik.
+  Tombol diagnostik memberi peringatan bahwa prosesnya bisa makan 10–20 detik.
+
 ## v2.9.10
 
 Rilis khusus **peringanan beban & pengurangan delay**. Tidak ada fitur baru; semua

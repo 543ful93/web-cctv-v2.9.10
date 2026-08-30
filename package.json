@@ -1,6 +1,6 @@
 {
   "name": "web-cctv-hg680p",
-  "version": "2.9.10",
+  "version": "2.9.13",
   "description": "Web CCTV ringan untuk STB Armbian HG680P - H.265 to H.264 HLS, Recording Scheduler, Retention Policy, Notifikasi Telegram, Audit Log, 2FA TOTP, Deteksi Objek AI, SQLite",
   "main": "server.js",
   "scripts": {

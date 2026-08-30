@@ -51,6 +51,120 @@ Untuk yang ingin langsung jalan. Rincian tiap langkah ada di bagian yang ditautk
 | 💾 **Cadangkan & Pulihkan** | Ekspor kamera + pengguna + pengaturan ke satu berkas JSON, lalu pulihkan di STB baru (mode Gabung / Ganti). |
 | 🧬 **Migrasi Skema Otomatis** | Database v2.7 Anda di-*upgrade* sendiri saat server dijalankan. **Tidak perlu menghapus rekaman.** |
 
+> ### 🔧 RTSP Offline / Connection fail?
+>
+> Ada panduan langkah demi langkah khusus di
+> **[`TROUBLESHOOTING-RTSP.md`](TROUBLESHOOTING-RTSP.md)** — mulai dari cek subnet
+> (penyebab paling sering), sampai mencari path RTSP yang benar per merek kamera.
+
+#### Tambahan di v2.9.12
+
+| Fitur | Penjelasan Singkat |
+|---|---|
+| ☁️ **Pencadangan rekaman ke cloud (rclone)** | Rekaman otomatis diunggah ke Google Drive / cloud lain setelah selesai. **rclone dipasang otomatis**, tetapi kredensial **Anda isi sendiri lewat SSH** (`rclone config`) — aplikasi tidak pernah menyimpan token cloud Anda. Unggahan berjalan **satu per satu** agar tidak membebani STB. Hanya kamera yang dicentang yang diunggah. |
+| 🗑️ **Pembersihan disk terjadwal lebih aman** | Ambang kini **bisa diatur** (bawaan 85%, sebelumnya hardcoded 90%). Rekaman yang **sudah terunggah ke cloud dihapus lebih dulu**, baru rekaman terlama yang belum terunggah. |
+
+**Cara menghubungkan Google Drive — 3 langkah, tanpa perlu SSH:**
+
+> **Konsepnya:** Google Drive butuh login lewat browser, sedangkan STB tidak punya layar.
+> Jadi login-nya Anda lakukan di **laptop**, lalu hasilnya **disalin-tempel** ke dashboard.
+> Anda tidak perlu paham `rclone config` di STB sama sekali.
+
+**Langkah 1 — Pasang rclone di STB**
+
+Dashboard → **Pengaturan** → **Cadangkan Rekaman ke Google Drive** → klik **Pasang Otomatis**.
+
+**Langkah 2 — Hubungkan Google Drive dari laptop**
+
+Di **laptop/PC** Anda:
+
+```bash
+# Windows
+winget install Rclone.Rclone
+# Mac
+brew install rclone
+# Linux
+sudo apt install rclone
+```
+
+Lalu jalankan:
+
+```bash
+rclone config
+```
+
+Ikuti 4 langkah ini:
+
+| Ditanya | Jawab |
+|---|---|
+| `n/s/q>` | ketik **`n`** (new remote) |
+| `name>` | ketik **`gdrive`** |
+| `Storage>` | cari & pilih **`google`** (Google Drive) |
+| `scope>` | pilih **`drive`** — sisanya tekan **Enter** saja |
+| `Use auto config?` | ketik **`y`** → browser terbuka → login Google → **Izinkan** |
+
+Setelah selesai, **buka berkas konfigurasinya dan salin seluruh isinya**:
+
+```bash
+# Windows
+notepad %APPDATA%\rclone\rclone.conf
+# Mac / Linux
+cat ~/.config/rclone/rclone.conf
+```
+
+Isinya kira-kira seperti ini:
+
+```ini
+[gdrive]
+type = drive
+scope = drive
+token = {"access_token":"ya29.a0ARW5m74...","token_type":"Bearer","refresh_token":"1//0g...","expiry":"2026-08-30T15:00:00Z"}
+```
+
+**Tempel seluruh isi itu** ke kotak di dashboard → klik **Simpan & Hubungkan**.
+
+> 🔒 **Token Anda aman.** Token disimpan **hanya** di berkas `rclone.conf` di STB dengan izin
+> **600** (hanya bisa dibaca pemilik) dan **tidak pernah dikirim balik** ke browser.
+> Kalau remote hanya satu, dashboard langsung memilihnya otomatis.
+
+**Langkah 3 — Pilih remote & aktifkan**
+
+1. Pilih remote `gdrive` (sudah terisi otomatis bila hanya satu)
+2. Isi **Folder di Drive** (bawaan `WebCCTV`)
+3. Centang **"Aktifkan pencadangan otomatis"**
+4. Klik **Uji Koneksi Drive** → pastikan berhasil
+5. Klik **Simpan**
+
+**Terakhir:** buka **Kelola Kamera** → edit kamera → centang
+**"Cadangkan rekaman kamera ini ke Cloud"**. Hanya kamera yang dicentang yang diunggah.
+
+Rekaman akan tersusun di Drive Anda sebagai:
+
+```
+Google Drive
+└── WebCCTV
+    ├── Kamera Depan
+    │   ├── 2026-08-30
+    │   │   ├── 2026-08-30T08-00-00.mp4
+    │   │   └── 2026-08-30T09-00-00.mp4
+    │   └── 2026-08-31
+    └── Kamera Belakang
+```
+
+> **Lebih suka cara SSH?** Boleh juga. Jalankan `rclone config` langsung di STB lewat SSH,
+> lalu klik **Muat Ulang** di dashboard. Keduanya menghasilkan hasil yang sama.
+
+> **Kalau token kedaluwarsa**, dashboard akan menampilkan errornya tetapi tidak bisa
+> memperbaruinya sendiri (karena token tidak disimpan aplikasi). Ulangi **Langkah 2** di
+> laptop, lalu tempel lagi — remote lama akan **diperbarui**, bukan diduplikasi.
+
+#### Tambahan di v2.9.11
+
+| Fitur | Penjelasan Singkat |
+|---|---|
+| 🩺 **Diagnostik RTSP per kamera** | Tombol baru di **Kelola Kamera** memeriksa 8 titik kegagalan **berurutan** dan memberi tahu langkah mana yang gagal beserta solusinya: URL, DNS, rute, **satu subnet**, port 554, ffmpeg, dan apakah ffmpeg benar-benar bisa membuka stream. Mengubah "Offline / Connection fail" yang membingungkan menjadi jawaban spesifik. |
+| 🔧 **Penyebab error tidak lagi disembunyikan** | Popup peta dulu menampilkan "Offline / Connection fail" untuk semua error, padahal backend sudah tahu penyebabnya (401, 404, connection refused, no route to host). Pesan asli kini ditampilkan. |
+
 #### Tambahan di v2.9.10 (peringanan & anti-delay)
 
 | Perubahan | Efek |
